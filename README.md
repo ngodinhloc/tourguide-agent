@@ -38,9 +38,8 @@ An AI-powered travel guide that accepts a natural-language location query and re
 ┌──────────▼───────────────┐   ┌───────▼────────────┐
 │  AI Agent                │   │  Redis             │
 │  FastAPI · port 8001     │──▶│  key: chat:{uuid}  │
-│  LangGraph pipeline      │   └────────────────────┘
-│  planner → researcher    │
-│         → synthesizer    │
+│  LangGraph ReAct loop    │   └────────────────────┘
+│  agent ⇄ tools           │
 └──────────────────────────┘
 ```
 
@@ -52,7 +51,7 @@ An AI-powered travel guide that accepts a natural-language location query and re
 
 - Search bar that submits a free-text location query
 - Polls `GET /api/chat/{id}` every 2 seconds while the agent is thinking
-- Streams tool-call progress messages (`Calling tool planner`, etc.) live in a styled code block with timestamps
+- Streams tool-call progress messages (`Calling tool geocode_location`, etc.) live in a styled code block with timestamps
 - Displays a pulsing `Thinking...` indicator when the agent is processing but has not yet announced a new tool
 - Renders the final result (narrative, places) in a results panel
 - Left sidebar with collapsible chat history; clicking an item loads the full conversation
@@ -81,23 +80,55 @@ Orchestrates the chat lifecycle. Key responsibilities:
 
 ### AI Agent — FastAPI + LangGraph (port 8001)
 
-Runs a three-node LangGraph pipeline triggered by a single `POST /api/chat` from the backend.
+Runs a LangGraph ReAct agent triggered by a single `POST /api/chat` from the backend. The LLM drives the execution — it decides which tools to call, in what order, and when to stop.
 
-**Pipeline nodes:**
+**ReAct loop:**
 
-| Node | Responsibility | Tools used |
-|------|---------------|------------|
-| **planner** | Resolves the query to a canonical location name, lat/lon | Google Geocoding API |
-| **researcher** | Fetches nearby attractions, restaurants, and hotels | Google Places API |
-| **synthesizer** | Generates a travel narrative from the research data | Claude (`claude-sonnet-4-6`, `max_tokens=8192`) |
+```
+agent node  →  reads messages, calls LLM with tools bound
+     │
+     ├── LLM returns tool_calls  →  tools node executes them  →  back to agent
+     │
+     └── LLM returns narrative (no tool_calls)  →  END
+```
 
-**Pre-announce pattern:** after each node completes, the agent writes a `"Calling tool {next_node}"` message with `agentStatus: isThinking` to Redis before the next node starts. This eliminates the UX gap during long operations (e.g., the ~40 s Anthropic call) so the frontend always shows immediate progress.
+**Tools:**
+
+| Tool | Responsibility | API used |
+|------|---------------|----------|
+| `geocode_location` | Resolves free-text query to canonical place name + GPS coordinates | Google Geocoding API |
+| `search_places` | Fetches nearby attractions, restaurants, and hotels | Google Places API |
+
+**Module structure:**
+
+```
+app/
+├── agent/
+│   ├── contracts/agent_interface.py   — AgentState (extends MessagesState)
+│   ├── tools/
+│   │   ├── geocoding.py               — GeocodingTool class + @tool geocode_location
+│   │   └── places.py                  — PlacesTool class + @tool search_places
+│   ├── agent.py                       — TravelAgent class (LLM + system prompt)
+│   └── agent_graph.py                 — AgentGraph class (ReAct graph compilation)
+├── configs/settings.py                — Settings (Pydantic BaseSettings)
+├── di.py                              — Dependency injection (get_graph, get_redis, get_chat_service)
+├── main.py                            — FastAPI app, middleware, router registration
+├── routers/
+│   ├── contracts/
+│   │   ├── chat.py                    — ChatRequest, ChatResponse schemas
+│   │   └── chat_interface.py          — ChatInterface, ChatMessage, AgentStatus types
+│   ├── chat_router.py                 — POST /api/chat (thin — delegates to ChatService)
+│   └── health_router.py               — GET /api/health
+└── services/
+    ├── chat_service.py                — ChatService (graph execution, Redis streaming)
+    └── redis_client.py                — RedisClient class
+```
 
 **Endpoints:**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/chat` | Run the LangGraph pipeline for a conversation |
+| `POST` | `/api/chat` | Run the ReAct agent for a conversation |
 | `GET` | `/api/health` | Health check |
 
 ### PostgreSQL (port 5432)
@@ -133,18 +164,17 @@ POST /api/chat/new  →  Backend
         │
         ▼
 AI Agent receives request
-  · Writes "Calling tool planner" to Redis
+  · LLM decides to call geocode_location
+  · Writes "Calling tool geocode_location" to Redis
         │
         ▼
-[planner node]  — geocodes location via Google
-  · Writes "Calling tool researcher" to Redis
+[tools node]  — geocode_location resolves location to GPS coords
+  · LLM decides to call search_places
+  · Writes "Calling tool search_places" to Redis
         │
         ▼
-[researcher node]  — fetches places
-  · Writes "Calling tool synthesizer" to Redis
-        │
-        ▼
-[synthesizer node]  — calls Claude to write narrative
+[tools node]  — search_places fetches attractions, restaurants, hotels
+  · LLM writes travel narrative (no more tool calls)
   · Writes final ChatMessage  (agentStatus: hasReplied)
   · Sets ChatInterface.agentStatus = hasReplied in Redis
         │

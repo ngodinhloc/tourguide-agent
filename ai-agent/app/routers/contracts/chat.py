@@ -1,6 +1,15 @@
 from typing import Optional
 from pydantic import BaseModel
-from app.schemas.tour import PlaceOut
+
+
+class PlaceOut(BaseModel):
+    name: str
+    category: str
+    address: str
+    rating: Optional[float] = None
+    description: str
+    image_url: Optional[str] = None
+    source_url: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
