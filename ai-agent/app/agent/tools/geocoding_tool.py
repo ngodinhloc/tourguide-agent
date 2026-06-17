@@ -1,5 +1,4 @@
 import httpx
-from langchain_core.tools import tool
 from app.configs.settings import settings
 
 
@@ -28,12 +27,3 @@ class GeocodingTool:
         except ValueError as e:
             return {"error": str(e)}
 
-
-_geocoding_tool = GeocodingTool()
-
-
-@tool
-async def geocode_location(query: str) -> dict:
-    """Resolve a free-text travel query (e.g. 'anything to see in Sydney') to a
-    canonical place name and GPS coordinates. Always call this first."""
-    return await _geocoding_tool.resolve(query)

@@ -1,6 +1,5 @@
 import asyncio
 import httpx
-from langchain_core.tools import tool
 from app.configs.settings import settings
 
 
@@ -50,12 +49,3 @@ class PlacesTool:
         )
         return attractions + restaurants + hotels
 
-
-_places_tool = PlacesTool()
-
-
-@tool
-async def search_places(latitude: float, longitude: float) -> list[dict]:
-    """Search for attractions, restaurants, and hotels near the given GPS coordinates.
-    Pass the latitude and longitude returned by geocode_location."""
-    return await _places_tool.search(latitude, longitude)

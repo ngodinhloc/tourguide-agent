@@ -1,8 +1,7 @@
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage
 from app.agent.contracts.agent_interface import AgentState
-from app.agent.tools.geocoding import geocode_location
-from app.agent.tools.places import search_places
+from app.agent.tools.tools import resolve_geocode, search_places
 from app.configs.settings import settings
 
 
@@ -21,7 +20,7 @@ Write the narrative as natural prose. Do not call any more tools after writing i
             model="claude-sonnet-4-6",
             api_key=settings.anthropic_api_key,
             max_tokens=8192,
-        ).bind_tools([geocode_location, search_places])
+        ).bind_tools([resolve_geocode, search_places])
 
     async def invoke(self, state: AgentState) -> dict:
         messages = state["messages"]

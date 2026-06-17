@@ -4,6 +4,8 @@ This article walks through the design and implementation of a stateful AI agent,
 
 The focus is on the architectural decisions that make this work in practice: how to run a LangGraph ReAct agent across multiple services, keep live state visible to the frontend without WebSockets, and reconstruct conversation history across turns.
 
+This was also my first time using FastAPI and LangGraph.
+
 ---
 
 ## What Makes an Agent "Stateful"?

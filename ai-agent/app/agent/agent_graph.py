@@ -3,14 +3,13 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from app.agent.contracts.agent_interface import AgentState
 from app.agent.agent import Agent
-from app.agent.tools.geocoding import geocode_location
-from app.agent.tools.places import search_places
+from app.agent.tools.tools import resolve_geocode, search_places
 
 
 class AgentGraph:
     def build(self):
         travel_agent = Agent()
-        tool_node = ToolNode([geocode_location, search_places])
+        tool_node = ToolNode([resolve_geocode, search_places])
 
         graph = StateGraph(AgentState)
         graph.add_node("agent", travel_agent.invoke)
