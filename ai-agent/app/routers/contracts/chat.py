@@ -12,9 +12,16 @@ class PlaceOut(BaseModel):
     source_url: Optional[str] = None
 
 
+class HistoryMessage(BaseModel):
+    actor: str
+    text: str
+    agentStatus: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     conversationId: str
     message: str
+    history: list[HistoryMessage] = []
     preferences: Optional[dict] = None
 
 

@@ -1,10 +1,8 @@
 # Design and Build a Stateful AI Agent
 
-Most "AI agents" in tutorials are stateless: one prompt in, one response out. Real-world agents are different — they plan, call tools, pass results between steps, handle failures, and keep the user informed while they work.
+This article walks through the design and implementation of a stateful AI agent, using a travel guide as the example. The agent takes a free-text location query, calls real external APIs to gather data, and uses Claude to write a travel narrative — while streaming live progress to the browser and supporting multi-turn conversations.
 
-This article walks through the architecture and implementation patterns of a stateful AI agent, using a travel guide as a concrete example. The agent takes a free-text query, resolves the destination, fetches real venue data from Google Places, and uses Claude to synthesise an engaging narrative — all while streaming live progress to the browser as each step executes.
-
-The interesting engineering is not the LLM call. It is everything around it: how to design a true ReAct agent loop, how to share state between services, how to stream intermediate state without WebSockets, and how to keep the UI responsive during a long model call.
+The focus is on the architectural decisions that make this work in practice: how to run a LangGraph ReAct agent across multiple services, keep live state visible to the frontend without WebSockets, and reconstruct conversation history across turns.
 
 ---
 
@@ -41,7 +39,7 @@ AI Agent (FastAPI + LangGraph) ─────┘
 
 **Redis is the shared live-state channel.** The backend fires the AI agent request without waiting for it to finish, and the browser polls the backend every two seconds. The agent writes progress directly to Redis as it calls each tool, so the frontend sees updates in near real-time without WebSockets or server-sent events.
 
-**PostgreSQL is the persistent store.** When a conversation ends, the full state is written to Postgres and the Redis key is deleted. History queries go to Postgres; live queries go to Redis.
+**PostgreSQL is the persistent store.** When a conversation ends, the flat `ChatMessage[]` array is written to Postgres and the Redis key is deleted. History queries go to Postgres; live queries go to Redis.
 
 ---
 
@@ -230,14 +228,14 @@ async newChat(message: string): Promise<{ id: string }> {
   const chatObject: ChatInterface = {
     id,
     title: message,
-    content: [{ actor: ChatActor.user, text: message, timestamp: new Date() }],
+    content: [{ actor: ChatActor.user, text: message, timestamp: new Date(), type: 'text' }],
     status: ChatStatus.isActive,
     agentStatus: AgentStatus.isThinking,
   };
 
-  await this.conversationRepo.save({ uuid: id, title: message, ... });
+  await this.conversationRepo.save({ uuid: id, title: message, content: chatObject.content });
   await this.redisService.setJson(`chat:${id}`, chatObject);
-  this.agentService.call(id, message);  // no await — fire and forget
+  this.agentService.call(id, message, []);  // no await — fire and forget
   return { id };
 }
 ```
@@ -246,7 +244,51 @@ The client gets `{ id }` back in milliseconds. It then starts polling and sees t
 
 ---
 
-## Step 4 — Stream State to the UI
+## Step 4 — Type Messages So the Frontend Knows How to Render Them
+
+Every `ChatMessage` carries a `type` field: `"text"` for plain content, `"json"` for structured agent replies.
+
+```typescript
+interface ChatMessage {
+  actor: "User" | "Agent";
+  text: string;           // plain string, or JSON string when type === "json"
+  timestamp: Date;
+  agentStatus?: "isThinking" | "hasReplied" | null;
+  type: "text" | "json";
+}
+```
+
+The AI agent encodes the final reply as a JSON string in `text` when `type === "json"`:
+
+```python
+if error:
+    chat_obj.content.append(
+        self._make_message(f"Error: {error}", AgentStatus.has_replied, "text")
+    )
+else:
+    result_json = json.dumps({"location": location_name, "narrative": narrative, "places": places})
+    chat_obj.content.append(
+        self._make_message(result_json, AgentStatus.has_replied, "json")
+    )
+```
+
+The frontend inspects `type` to decide how to render:
+
+```typescript
+const finalMsg = [...chat.content].reverse().find((m) => m.agentStatus === "hasReplied");
+
+if (finalMsg?.type === "json") {
+  setResult(JSON.parse(finalMsg.text) as ChatResult);  // → ResultsPanel
+} else {
+  setError(finalMsg?.text ?? "No response.");          // → error box
+}
+```
+
+This eliminates a parallel `result` field on `ChatInterface`. The message array is the single source of truth — every piece of information, including structured results, lives in `content`. The `type` field is the rendering contract between backend and frontend.
+
+---
+
+## Step 5 — Stream State to the UI
 
 ### Reading Tool Calls in Real Time
 
@@ -265,7 +307,7 @@ async for update in self._graph.astream(
             if isinstance(last, AIMessage) and last.tool_calls:
                 for tc in last.tool_calls:
                     chat_obj.content.append(
-                        self._make_message(f"Calling tool {tc['name']}", AgentStatus.is_thinking)
+                        self._make_message(f"Calling tool {tc['name']}", AgentStatus.is_thinking, "text")
                     )
 
         await self._redis.set(key, chat_obj.model_dump_json())
@@ -282,12 +324,19 @@ async function schedulePoll(id: string) {
   const chat = await pollChat(id);
   agentStatusRef.current = chat.agentStatus ?? null;
 
-  const agentMessages = chat.content.filter(m => m.actor === "Agent");
-  setMessages(agentMessages);
+  // Only show agent messages belonging to the current turn
+  const allAgentMessages = chat.content.filter((m) => m.actor === "Agent");
+  const currentTurnMessages = allAgentMessages.slice(agentMessageOffsetRef.current);
+  setMessages(currentTurnMessages);
 
   if (chat.agentStatus === "hasReplied") {
     endConversation();
-    setResult(chat.result);
+    const finalMsg = [...chat.content].reverse().find((m) => m.agentStatus === "hasReplied");
+    if (finalMsg?.type === "json") {
+      setResult(JSON.parse(finalMsg.text) as ChatResult);
+    } else {
+      setError(finalMsg?.text ?? "No response.");
+    }
     await stopChat(id);
     window.dispatchEvent(new CustomEvent("chat-completed")); // sidebar refreshes
   } else if (chat.agentStatus === "isThinking") {
@@ -296,44 +345,159 @@ async function schedulePoll(id: string) {
 }
 ```
 
-A `useRef` (not state) tracks `agentStatus` so that timer callbacks always read the current value, not a stale closure.
+`agentMessageOffsetRef` tracks how many agent messages existed before the current turn started. Slicing from that offset means the tool-call log shows only messages from the ongoing turn, not from previous turns that already have their own rendered panels.
 
 A "Thinking…" indicator appears when consecutive polls return the same number of tool messages — meaning the agent is processing but hasn't announced the next tool yet:
 
 ```typescript
-const thinkingCount = agentMessages.filter(m => m.agentStatus === "isThinking").length;
+const thinkingCount = currentTurnMessages.filter((m) => m.agentStatus === "isThinking").length;
 setIsThinkingIdle(thinkingCount === prevThinkingCountRef.current);
 prevThinkingCountRef.current = thinkingCount;
 ```
 
 ---
 
-## Step 5 — Persist State
+## Step 6 — Multi-Turn Conversations
 
-When the agent finishes, the backend persists the full conversation to PostgreSQL and deletes the Redis key. The Redis key is intentionally ephemeral — it only exists for the lifetime of an active conversation.
+A single-turn agent is useful; a conversational agent is far more powerful. The user should be able to say "what's in Melbourne?" and follow up with "for a weekend trip" without repeating the city.
+
+### Passing History to the Agent
+
+The backend `continueChat` endpoint reads the full message history from Redis (active conversation) or PostgreSQL (after stop), appends the new user message, and forwards the complete history to the AI agent:
+
+```typescript
+async continueChat(id: string, message: string): Promise<{ accepted: true }> {
+  const cached = await this.redisService.getJson<ChatInterface>(`chat:${id}`);
+  const existingMessages = cached
+    ? cached.content
+    : (await this.conversationRepo.findOne({ where: { uuid: id } })).content as ChatMessage[];
+
+  const chatObject: ChatInterface = {
+    id,
+    title: cached?.title ?? null,
+    content: [...existingMessages, { actor: ChatActor.user, text: message, timestamp: new Date(), type: 'text' }],
+    status: ChatStatus.isActive,
+    agentStatus: AgentStatus.isThinking,
+  };
+
+  await this.redisService.setJson(`chat:${id}`, chatObject);
+  this.agentService.call(id, message, existingMessages);  // full history passed
+  return { accepted: true };
+}
+```
+
+The AI agent reconstructs LangChain messages from the history before invoking the graph. User turns become `HumanMessage`; completed agent replies (`hasReplied`, `type: "json"`) become `AIMessage`. Tool-call progress messages (`isThinking`) are skipped — they are UI artefacts, not meaningful conversation context:
+
+```python
+@staticmethod
+def _build_messages(history: list, new_message: str) -> list:
+    messages = []
+    for msg in history:
+        if msg.actor == "User":
+            messages.append(HumanMessage(content=msg.text))
+        elif msg.actor == "Agent" and msg.agentStatus == "hasReplied":
+            messages.append(AIMessage(content=msg.text))
+    messages.append(HumanMessage(content=new_message))
+    return messages
+```
+
+### Preserving Completed Turns in the UI
+
+When the user submits a follow-up, the frontend moves the current turn's messages and result into a `completedTurns` array before resetting for the next turn:
+
+```typescript
+async function handleContinue(message: string) {
+  if (userMessage) {
+    setCompletedTurns((prev) => [
+      ...prev,
+      {
+        userMessage,
+        thinkingMessages: messages.filter((m) => m.agentStatus === "isThinking"),
+        result,
+      },
+    ]);
+  }
+  agentMessageOffsetRef.current += messages.length;  // advance the slice window
+  // reset current turn, call continueChat, start polling
+}
+```
+
+Each completed turn renders its own chat bubble, tool-call log, and results panel. The conversation scrolls naturally — old turns remain visible above while the new one processes below.
+
+### Reconstructing History on Load
+
+When a user opens a saved conversation, the flat `ChatMessage[]` array must be split back into turns. Each `User` message starts a new turn; the subsequent `Agent` messages belong to it until `agentStatus === "hasReplied"` closes the turn:
+
+```typescript
+function splitTurns(content: ChatMessage[]): Turn[] {
+  const turns: Turn[] = [];
+  let userMessage = "";
+  let agentMessages: ChatMessage[] = [];
+
+  for (const msg of content) {
+    if (msg.actor === "User") {
+      userMessage = msg.text;
+      agentMessages = [];
+    } else if (msg.actor === "Agent") {
+      agentMessages.push(msg);
+      if (msg.agentStatus === "hasReplied") {
+        let result: ChatResult | null = null;
+        if (msg.type === "json") {
+          try { result = JSON.parse(msg.text) as ChatResult; } catch {}
+        }
+        turns.push({ userMessage, agentMessages: [...agentMessages], result, error: null });
+      }
+    }
+  }
+
+  return turns;
+}
+```
+
+All turns except the last go into `completedTurns`. The last turn populates the current-turn state. `agentMessageOffsetRef` is set to the total number of agent messages in all completed turns — so if the user continues from a loaded history, the offset is already correct.
+
+---
+
+## Step 7 — Persist State
+
+When the agent finishes, the backend persists the `ChatMessage[]` array directly to PostgreSQL — not a nested wrapper object:
 
 ```typescript
 async stopChat(id: string): Promise<{ stopped: true }> {
-  const current = await this.redisService.getJson(`chat:${id}`);
+  const current = await this.redisService.getJson<ChatInterface>(`chat:${id}`);
   await this.conversationRepo.save({
     uuid: id,
-    content: { ...current, status: ChatStatus.isStopped },
+    content: current.content,  // flat ChatMessage[] stored in jsonb column
   });
   await this.redisService.del(`chat:${id}`);
   return { stopped: true };
 }
 ```
 
-The poll endpoint reads from Redis first and falls back to Postgres on miss. This means history items — whose Redis key has been deleted — load correctly without any extra logic on the client:
+Storing the message array directly — rather than a `ChatInterface` object that embeds the array — means the DB row is a clean, flat record. Every piece of structured information (including the full result payload for each agent turn) lives inside a `ChatMessage` with `type: "json"`. Nothing is split across columns.
+
+The poll endpoint also writes to the DB opportunistically: when it detects `agentStatus === hasReplied` in Redis, it fires a background update so a page refresh never loses a completed reply, even if the user never explicitly triggers `stopChat`:
 
 ```typescript
 async getChat(id: string): Promise<ChatInterface> {
-  const cached = await this.redisService.getJson(`chat:${id}`);
-  if (cached) return cached;                          // live conversation
+  const cached = await this.redisService.getJson<ChatInterface>(`chat:${id}`);
+  if (cached) {
+    if (cached.agentStatus === AgentStatus.hasReplied) {
+      this.conversationRepo.update({ uuid: id }, { content: cached.content }).catch(() => {});
+    }
+    return cached;
+  }
 
   const row = await this.conversationRepo.findOne({ where: { uuid: id } });
   if (!row) throw new NotFoundException(`Conversation ${id} not found`);
-  return row.content as unknown as ChatInterface;     // completed conversation
+
+  return {
+    id: row.uuid,
+    title: row.title,
+    content: row.content as unknown as ChatMessage[],
+    status: ChatStatus.isStopped,
+    agentStatus: AgentStatus.hasReplied,
+  };
 }
 ```
 
@@ -343,6 +507,12 @@ async getChat(id: string): Promise<ChatInterface> {
 
 **ReAct over hardcoded pipeline.** A fixed `planner → researcher → synthesizer` sequence is a workflow, not an agent. The LLM driving tool selection at runtime is what makes the system an actual agent — it can adapt to what the tools return, handle errors gracefully, and generalise to inputs the pipeline wasn't designed for.
 
+**`type` field as a rendering contract.** Every `ChatMessage` has a `type: "text" | "json"` field. The frontend branches on this — never on the actor, the index, or any implicit positional assumption. Adding a new message kind (e.g., `"image"`) only requires adding a branch in the renderer. No schema changes elsewhere.
+
+**Result embedded in the message, not alongside it.** Putting the structured result (`location`, `narrative`, `places`) inside the `hasReplied` message as a JSON string means the message array is the single source of truth. A multi-turn conversation with ten replies has ten self-contained result payloads — each visible in the flat DB row and reconstructable without joins or extra columns.
+
+**`splitTurns` for history reconstruction.** A flat `ChatMessage[]` is the canonical representation — both in Redis and PostgreSQL. Splitting into turns is a pure function over that array, applied only when needed (history load). This means the storage format never changes based on how many turns a conversation has.
+
 **Redis over WebSockets.** Redis with polling is simpler to operate, trivial to debug (inspect the key directly with `redis-cli`), and scales horizontally without sticky sessions. For a 2-second poll interval, the overhead is negligible.
 
 **Fire-and-forget over synchronous execution.** Long-running agents should never block an HTTP connection. Returning a job ID immediately and letting the client poll is more resilient — the client can reconnect, retry, or time out without corrupting the agent's execution.
@@ -351,9 +521,7 @@ async getChat(id: string): Promise<ChatInterface> {
 
 **`@lru_cache` as the singleton mechanism.** One decorator replaces the `global _instance / if _instance is None` pattern. The function signature documents what gets constructed; the cache ensures it happens once.
 
-**`agentStatus` on every message.** Tagging each message with `isThinking` or `hasReplied` means the frontend can derive the tool-call log and the final result in a single pass over the same array — no parallel data structures to keep in sync.
-
-**Ephemeral Redis, durable Postgres.** Redis holds what the agent is doing right now. Postgres holds what happened. Keeping them separate makes each easier to reason about and operate.
+**Flat `ChatMessage[]` in PostgreSQL.** Storing the message array directly in the `jsonb` column (rather than a nested `ChatInterface` wrapper) keeps the schema honest. Querying, debugging with `psql`, and reconstructing state all operate on the same shape.
 
 ---
 

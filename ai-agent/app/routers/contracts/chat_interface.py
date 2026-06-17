@@ -1,6 +1,6 @@
 from enum import Enum
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel
 
 
@@ -19,17 +19,18 @@ class ChatActor(str, Enum):
     agent = "Agent"
 
 
+class ChatResult(BaseModel):
+    location: str
+    narrative: str
+    places: list[dict] = []
+
+
 class ChatMessage(BaseModel):
     actor: ChatActor
     text: str
     timestamp: datetime
     agentStatus: Optional[AgentStatus] = None
-
-
-class ChatResult(BaseModel):
-    location: str
-    narrative: str
-    places: list[dict] = []
+    type: Literal["text", "json"] = "text"
 
 
 class ChatInterface(BaseModel):
@@ -38,4 +39,3 @@ class ChatInterface(BaseModel):
     content: list[ChatMessage] = []
     status: ChatStatus
     agentStatus: Optional[AgentStatus] = None
-    result: Optional[ChatResult] = None

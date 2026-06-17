@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
+import { ChatMessage } from '../contracts/chat.interface';
 
 @Injectable()
 export class AgentService {
@@ -10,9 +11,9 @@ export class AgentService {
     this.aiAgentUrl = process.env.AI_AGENT_URL ?? 'http://localhost:8001';
   }
 
-  call(id: string, message: string): void {
+  call(id: string, message: string, history: ChatMessage[] = []): void {
     this.httpService
-      .post(`${this.aiAgentUrl}/api/chat`, { message, conversationId: id })
+      .post(`${this.aiAgentUrl}/api/chat`, { message, conversationId: id, history })
       .subscribe({
         error: (err: unknown) => {
           const errorMessage = err instanceof Error ? err.message : String(err);

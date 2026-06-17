@@ -9,6 +9,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+export async function continueChat(id: string, message: string): Promise<{ accepted: true }> {
+  return request(`/api/chat/${id}/cont`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+}
+
 export async function newChat(message: string): Promise<{ id: string }> {
   return request("/api/chat/new", {
     method: "POST",

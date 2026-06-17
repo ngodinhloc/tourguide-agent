@@ -25,48 +25,55 @@ export class ChatService {
     const chatObject: ChatInterface = {
       id,
       title: message,
-      content: [{ actor: ChatActor.user, text: message, timestamp: new Date() }],
+      content: [{ actor: ChatActor.user, text: message, timestamp: new Date(), type: 'text' }],
       status: ChatStatus.isActive,
       agentStatus: AgentStatus.isThinking,
     };
     const conversation = this.conversationRepo.create({
       uuid: id,
       title: message,
-      content: chatObject.content as unknown as Record<string, unknown>,
+      content: chatObject.content as unknown as Record<string, unknown>[],
     });
     await this.conversationRepo.save(conversation);
     await this.redisService.setJson(this.redisKey(id), chatObject);
-    this.agentService.call(id, message);
+    this.agentService.call(id, message, []);
     return { id };
   }
 
   async continueChat(id: string, message: string): Promise<{ accepted: true }> {
-    const conversation = await this.conversationRepo.findOne({ where: { uuid: id } });
-    if (!conversation) {
-      throw new NotFoundException(`Conversation ${id} not found`);
-    }
+    let existingMessages: ChatMessage[];
+    let title: string | null = null;
 
-    const content = conversation.content as unknown as ChatMessage[];
-    const existingMessages: ChatMessage[] = Array.isArray(content)
-      ? content
-      : [];
+    const cached = await this.redisService.getJson<ChatInterface>(this.redisKey(id));
+    if (cached) {
+      existingMessages = cached.content ?? [];
+      title = cached.title ?? null;
+    } else {
+      const conversation = await this.conversationRepo.findOne({ where: { uuid: id } });
+      if (!conversation) {
+        throw new NotFoundException(`Conversation ${id} not found`);
+      }
+      existingMessages = conversation.content as unknown as ChatMessage[];
+      title = conversation.title ?? null;
+    }
 
     const newMessage: ChatMessage = {
       actor: ChatActor.user,
       text: message,
       timestamp: new Date(),
+      type: 'text',
     };
 
     const chatObject: ChatInterface = {
       id,
-      title: conversation.title ?? null,
+      title,
       content: [...existingMessages, newMessage],
       status: ChatStatus.isActive,
       agentStatus: AgentStatus.isThinking,
     };
 
     await this.redisService.setJson(this.redisKey(id), chatObject);
-    this.agentService.call(id, message);
+    this.agentService.call(id, message, existingMessages);
     return { accepted: true };
   }
 
@@ -76,15 +83,10 @@ export class ChatService {
       throw new NotFoundException(`Conversation ${id} not found`);
     }
 
-    const chatObject: ChatInterface = {
-      ...current,
-      status: ChatStatus.isStopped,
-    };
-
     await this.conversationRepo.save({
       uuid: id,
-      title: chatObject.title ?? undefined,
-      content: chatObject as unknown as Record<string, unknown>,
+      title: current.title ?? undefined,
+      content: current.content as unknown as Record<string, unknown>[],
     });
 
     await this.redisService.del(this.redisKey(id));
@@ -93,13 +95,29 @@ export class ChatService {
 
   async getChat(id: string): Promise<ChatInterface> {
     const cached = await this.redisService.getJson<ChatInterface>(this.redisKey(id));
-    if (cached) return cached;
+    if (cached) {
+      if (cached.agentStatus === AgentStatus.hasReplied) {
+        this.conversationRepo.update(
+          { uuid: id },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          { content: cached.content } as any,
+        ).catch(() => {});
+      }
+      return cached;
+    }
 
     const conversation = await this.conversationRepo.findOne({ where: { uuid: id } });
     if (!conversation) {
       throw new NotFoundException(`Conversation ${id} not found`);
     }
-    return conversation.content as unknown as ChatInterface;
+
+    return {
+      id: conversation.uuid,
+      title: conversation.title,
+      content: conversation.content as unknown as ChatMessage[],
+      status: ChatStatus.isStopped,
+      agentStatus: AgentStatus.hasReplied,
+    };
   }
 
   async getHistory(): Promise<{ id: string; title: string; createdAt: Date }[]> {

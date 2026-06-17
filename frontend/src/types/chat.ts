@@ -2,13 +2,6 @@ export type ChatStatus = "isActive" | "isStopped";
 export type AgentStatus = "isThinking" | "hasReplied";
 export type ChatActor = "User" | "Agent";
 
-export interface ChatMessage {
-  actor: ChatActor;
-  text: string;
-  timestamp: string;
-  agentStatus?: AgentStatus | null;
-}
-
 export interface ChatPlace {
   name: string;
   category: "attraction" | "restaurant" | "hotel";
@@ -25,13 +18,20 @@ export interface ChatResult {
   places: ChatPlace[];
 }
 
+export interface ChatMessage {
+  actor: ChatActor;
+  text: string;
+  timestamp: string;
+  agentStatus?: AgentStatus | null;
+  type: "text" | "json";
+}
+
 export interface ChatInterface {
   id: string;
   title?: string | null;
   content: ChatMessage[];
   status: ChatStatus;
   agentStatus?: AgentStatus;
-  result?: ChatResult;
 }
 
 export interface ConversationSummary {

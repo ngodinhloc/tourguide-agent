@@ -14,7 +14,10 @@ export default function SearchBar({ onSearch, loading, placeholder = "Enter a ci
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (value.trim()) onSearch(value.trim());
+    if (value.trim()) {
+      onSearch(value.trim());
+      setValue("");
+    }
   }
 
   return (

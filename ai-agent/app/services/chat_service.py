@@ -24,7 +24,7 @@ class ChatService:
         chat_obj.agentStatus = AgentStatus.is_thinking
         await self._redis.set(key, chat_obj.model_dump_json())
 
-        initial_messages = [HumanMessage(content=request.message)]
+        initial_messages = self._build_messages(request.history, request.message)
         all_messages: list = list(initial_messages)
         error: str | None = None
 
@@ -55,9 +55,11 @@ class ChatService:
         if tool_error and not error:
             error = tool_error
 
-        reply_text = f"Error: {error}" if error else narrative
-        chat_obj.result = ChatResult(location=location_name, narrative=narrative, places=places)
-        chat_obj.content.append(self._make_message(reply_text, AgentStatus.has_replied))
+        if error:
+            chat_obj.content.append(self._make_message(f"Error: {error}", AgentStatus.has_replied, "text"))
+        else:
+            result_json = json.dumps({"location": location_name, "narrative": narrative, "places": places})
+            chat_obj.content.append(self._make_message(result_json, AgentStatus.has_replied, "json"))
         chat_obj.agentStatus = AgentStatus.has_replied
         await self._redis.set(key, chat_obj.model_dump_json())
 
@@ -72,16 +74,28 @@ class ChatService:
         )
 
     @staticmethod
+    def _build_messages(history: list, new_message: str) -> list:
+        messages = []
+        for msg in history:
+            if msg.actor == "User":
+                messages.append(HumanMessage(content=msg.text))
+            elif msg.actor == "Agent" and msg.agentStatus == "hasReplied":
+                messages.append(AIMessage(content=msg.text))
+        messages.append(HumanMessage(content=new_message))
+        return messages
+
+    @staticmethod
     def _redis_key(conversation_id: str) -> str:
         return f"chat:{conversation_id}"
 
     @staticmethod
-    def _make_message(text: str, agent_status: AgentStatus) -> ChatMessage:
+    def _make_message(text: str, agent_status: AgentStatus, msg_type: str = "text") -> ChatMessage:
         return ChatMessage(
             actor=ChatActor.agent,
             text=text,
             timestamp=datetime.now(timezone.utc),
             agentStatus=agent_status,
+            type=msg_type,
         )
 
     @staticmethod

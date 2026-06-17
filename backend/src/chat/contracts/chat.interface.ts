@@ -13,13 +13,6 @@ export enum ChatActor {
   agent = 'Agent',
 }
 
-export interface ChatMessage {
-  actor: ChatActor;
-  text: string;
-  timestamp: Date;
-  agentStatus?: AgentStatus | null;
-}
-
 export interface ChatPlace {
   name: string;
   category: string;
@@ -36,11 +29,18 @@ export interface ChatResult {
   places: ChatPlace[];
 }
 
+export interface ChatMessage {
+  actor: ChatActor;
+  text: string;
+  timestamp: Date;
+  agentStatus?: AgentStatus | null;
+  type: "text" | "json";
+}
+
 export interface ChatInterface {
   id: string;
   title?: string | null;
   content: ChatMessage[];
   status: ChatStatus;
   agentStatus?: AgentStatus;
-  result?: ChatResult;
 }
