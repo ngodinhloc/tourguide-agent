@@ -15,3 +15,6 @@ async def search_places(latitude: float, longitude: float) -> list[dict]:
     """Search for attractions, restaurants, and hotels near the given GPS coordinates.
     Pass the latitude and longitude returned by resolve_geocode."""
     return await PlacesTool().search(latitude, longitude)
+
+
+tools = [resolve_geocode, search_places]

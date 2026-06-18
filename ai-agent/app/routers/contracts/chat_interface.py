@@ -48,3 +48,24 @@ class ChatInterface(BaseModel):
     content: list[ChatMessage] = []
     status: ChatStatus
     agentStatus: Optional[AgentStatus] = None
+
+
+class HistoryMessage(BaseModel):
+    actor: str
+    text: Union[str, dict]
+    agentStatus: Optional[str] = None
+
+
+class ChatRequest(BaseModel):
+    conversationId: str
+    message: str
+    history: list[HistoryMessage] = []
+    preferences: Optional[dict] = None
+
+
+class ChatResponse(BaseModel):
+    conversationId: str
+    location: str
+    narrative: str
+    places: list[ChatPlace]
+    error: Optional[str] = None

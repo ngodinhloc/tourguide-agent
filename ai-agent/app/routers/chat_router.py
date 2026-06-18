@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from app.routers.contracts.chat import ChatRequest, ChatResponse
+from app.routers.contracts.chat_interface import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
 from app.container import container
 

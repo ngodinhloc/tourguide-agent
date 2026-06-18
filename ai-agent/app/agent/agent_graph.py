@@ -3,16 +3,16 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from app.agent.contracts.agent_interface import AgentState
 from app.agent.agent import Agent
-from app.agent.tools.tools import resolve_geocode, search_places
+from app.agent.tools.tools import tools
 
 
 class AgentGraph:
     def build(self):
-        travel_agent = Agent()
-        tool_node = ToolNode([resolve_geocode, search_places])
+        agent = Agent()
+        tool_node = ToolNode(tools)
 
         graph = StateGraph(AgentState)
-        graph.add_node("agent", travel_agent.invoke)
+        graph.add_node("agent", agent.invoke)
         graph.add_node("tools", tool_node)
         graph.add_edge(START, "agent")
         graph.add_conditional_edges("agent", self._should_continue, {"tools": "tools", "end": END})
