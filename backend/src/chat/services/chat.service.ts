@@ -25,7 +25,7 @@ export class ChatService {
     const chatObject: ChatInterface = {
       id,
       title: message,
-      content: [{ actor: ChatActor.user, text: message, timestamp: new Date(), type: 'text' }],
+      content: [{ actor: ChatActor.user, text: message, timestamp: new Date() }],
       status: ChatStatus.isActive,
       agentStatus: AgentStatus.isThinking,
     };
@@ -61,7 +61,6 @@ export class ChatService {
       actor: ChatActor.user,
       text: message,
       timestamp: new Date(),
-      type: 'text',
     };
 
     const chatObject: ChatInterface = {

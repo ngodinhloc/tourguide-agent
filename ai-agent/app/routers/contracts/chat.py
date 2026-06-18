@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 from pydantic import BaseModel
 
 
@@ -14,7 +14,7 @@ class PlaceOut(BaseModel):
 
 class HistoryMessage(BaseModel):
     actor: str
-    text: str
+    text: Union[str, dict]
     agentStatus: Optional[str] = None
 
 

@@ -1,9 +1,9 @@
 import ReactMarkdown from "react-markdown";
 import PlaceCard from "./PlaceCard";
-import { ChatResult } from "@/types/chat";
+import { ChatContent } from "@/types/chat";
 
 interface ResultsPanelProps {
-  result: ChatResult;
+  result: ChatContent;
 }
 
 const CATEGORY_ORDER = ["attraction", "restaurant", "hotel"];
@@ -14,7 +14,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export default function ResultsPanel({ result }: ResultsPanelProps) {
-  const grouped = CATEGORY_ORDER.reduce<Record<string, ChatResult["places"]>>(
+  const grouped = CATEGORY_ORDER.reduce<Record<string, ChatContent["places"]>>(
     (acc, cat) => {
       acc[cat] = result.places.filter((p) => p.category === cat);
       return acc;

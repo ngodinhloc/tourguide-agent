@@ -161,7 +161,61 @@ conversations
   updated_at  timestamptz
 ```
 
-The `content` column stores the raw message array directly — not a nested `ChatInterface` object. Each element is a `ChatMessage` with `actor`, `text`, `timestamp`, `agentStatus`, and `type` fields.
+The `content` column stores the flat `ChatMessage[]` array directly. Each element has `actor`, `text`, `timestamp`, and `agentStatus`. The `text` field is either a plain string (tool call announcements) or a `ChatContent` object (the final structured reply) — stored as native JSON, no embedded JSON strings.
+
+**Sample `content` column value:**
+
+```json
+[
+  {
+    "actor": "User",
+    "text": "tell me about Sydney",
+    "timestamp": "2026-06-18T00:54:52.046000Z",
+    "agentStatus": null
+  },
+  {
+    "actor": "Agent",
+    "text": "Calling tool resolve_geocode",
+    "timestamp": "2026-06-18T00:54:54.034561Z",
+    "agentStatus": "isThinking"
+  },
+  {
+    "actor": "Agent",
+    "text": "Calling tool search_places",
+    "timestamp": "2026-06-18T00:54:56.798732Z",
+    "agentStatus": "isThinking"
+  },
+  {
+    "actor": "Agent",
+    "text": {
+      "location": "Sydney NSW, Australia",
+      "narrative": "Sydney is one of the world's most breathtaking cities...",
+      "places": [
+        {
+          "name": "Sydney Opera House",
+          "category": "attraction",
+          "address": "Bennelong Point, Sydney",
+          "rating": 4.8,
+          "description": "",
+          "image_url": null,
+          "source_url": null
+        },
+        {
+          "name": "Four Seasons Hotel Sydney",
+          "category": "hotel",
+          "address": "199 George Street, The Rocks",
+          "rating": 4.5,
+          "description": "",
+          "image_url": null,
+          "source_url": null
+        }
+      ]
+    },
+    "timestamp": "2026-06-18T00:55:10.823519Z",
+    "agentStatus": "hasReplied"
+  }
+]
+```
 
 ### Redis (internal, no host port)
 
@@ -284,21 +338,28 @@ Open [http://localhost:3000](http://localhost:3000).
 AgentStatus:  isThinking | hasReplied
 ChatStatus:   isActive   | isStopped
 ChatActor:    User       | Agent
-MessageType:  text       | json
+
+ChatPlace {
+  name:        string
+  category:    "attraction" | "restaurant" | "hotel"
+  address:     string
+  rating:      number | null
+  description: string
+  image_url:   string | null
+  source_url:  string | null
+}
+
+ChatContent {
+  location:  string
+  narrative: string
+  places:    ChatPlace[]
+}
 
 ChatMessage {
   actor:       ChatActor
-  text:        string           // plain text, OR JSON string when type === "json"
+  text:        string | ChatContent   // string for tool calls/errors, ChatContent for final reply
   timestamp:   datetime
-  agentStatus: AgentStatus | null   // null for user messages
-  type:        MessageType
-}
-
-// When type === "json", text contains:
-{
-  location:  string
-  narrative: string
-  places:    Place[]
+  agentStatus: AgentStatus | null
 }
 
 ChatInterface {

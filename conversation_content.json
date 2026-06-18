@@ -1,0 +1,438 @@
+[
+  {
+    "text": "tell me about Sydney",
+    "actor": "User",
+    "timestamp": "2026-06-18T00:54:52.046000Z",
+    "agentStatus": null
+  },
+  {
+    "text": "Calling tool resolve_geocode",
+    "actor": "Agent",
+    "timestamp": "2026-06-18T00:54:54.034561Z",
+    "agentStatus": "isThinking"
+  },
+  {
+    "text": "Calling tool search_places",
+    "actor": "Agent",
+    "timestamp": "2026-06-18T00:54:56.798732Z",
+    "agentStatus": "isThinking"
+  },
+  {
+    "text": {
+      "places": [
+        {
+          "name": "Sydney Opera House",
+          "rating": 4.8,
+          "address": "Bennelong Point, Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Museum of Contemporary Art Australia",
+          "rating": 4.3,
+          "address": "140 George Street, The Rocks",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Luna Park Sydney",
+          "rating": 4.1,
+          "address": "1 Olympic Dr, Milsons Point",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Darling Harbour",
+          "rating": 4.7,
+          "address": "Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Sydney Harbour Bridge",
+          "rating": 4.8,
+          "address": "Sydney Harbour Bridge, Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "SEA LIFE Sydney Aquarium",
+          "rating": 4.3,
+          "address": "1-5 Wheat Road, Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Powerhouse Ultimo",
+          "rating": 4.6,
+          "address": "Level 3/500 Harris Street, Ultimo",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "WILD LIFE Sydney Zoo",
+          "rating": 4.1,
+          "address": "1-5 Wheat Road, Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "InterContinental Sydney by IHG",
+          "rating": 4.4,
+          "address": "16 Phillip Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "QT Sydney",
+          "rating": 4.6,
+          "address": "49 Market Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Amora Hotel Jamison Sydney",
+          "rating": 4.2,
+          "address": "11 Jamison Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Swissôtel Sydney",
+          "rating": 4.2,
+          "address": "68 Market Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "The Little Snail Restaurant",
+          "rating": 4.6,
+          "address": "Shop 3/50 Murray Street, Pyrmont",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Adina Surry Hills Sydney",
+          "rating": 4.2,
+          "address": "359 Crown Street, Surry Hills",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Castlereagh Boutique Hotel, Ascend Hotel Collection",
+          "rating": 4,
+          "address": "169 Castlereagh Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Vibe Hotel Sydney",
+          "rating": 3.9,
+          "address": "111 Goulburn Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Four Seasons Hotel Sydney",
+          "rating": 4.5,
+          "address": "199 George Street, The Rocks",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "The Sebel Quay West Suites Sydney",
+          "rating": 4.5,
+          "address": "98 Gloucester Street, The Rocks",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "YHA Sydney Harbour - The Rocks",
+          "rating": 4.5,
+          "address": "110 Cumberland Street, The Rocks",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Harbour Rocks Hotel",
+          "rating": 4.3,
+          "address": "34 Harrington Street, The Rocks",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "InterContinental Sydney by IHG",
+          "rating": 4.4,
+          "address": "16 Phillip Street, Sydney",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        }
+      ],
+      "location": "Sydney NSW, Australia",
+      "narrative": "Here's your guide to the magnificent **Sydney, NSW, Australia**! 🦘🌉\n\nSydney is one of the world's most breathtaking cities, and it's easy to see why the moment you arrive. The skyline is defined by two of the planet's most iconic landmarks — the **Sydney Opera House** (rated an outstanding 4.8/5), perched majestically on Bennelong Point with its sail-like shell roofs, and the towering **Sydney Harbour Bridge** (also rated 4.8/5), which you can actually climb for panoramic views of the glittering harbour. The vibrant waterfront precinct of **Darling Harbour** (4.7/5) is another must-visit, offering a buzzing mix of dining, entertainment, and waterside walkways. For families and curious minds, **SEA LIFE Sydney Aquarium** and **WILD LIFE Sydney Zoo** sit side by side on Wheat Road, while the heritage-rich **Powerhouse Ultimo** (4.6/5) delights visitors with its world-class science and design exhibits. Culture lovers shouldn't miss the **Museum of Contemporary Art Australia** in The Rocks (4.3/5), and thrill-seekers can head across the harbour to **Luna Park Sydney** for some old-school fun.\n\nWhen it comes to dining and staying, Sydney truly spoils you for choice. Foodies will adore **The Little Snail Restaurant** in Pyrmont (4.6/5), a French-inspired gem perfect for a romantic dinner. The city's hotel scene is equally impressive — the historic **The Rocks** precinct alone boasts a cluster of wonderful stays, including the luxurious **Four Seasons Hotel Sydney** and the charming **Harbour Rocks Hotel**, both offering enviable proximity to the harbour. For stylish city-centre stays, **QT Sydney** on Market Street (4.6/5) is a design lover's dream, while budget-conscious travellers will appreciate the superb **YHA Sydney Harbour** (4.5/5) with its unbeatable views.\n\nSydney is a city that effortlessly blends natural beauty, world-class culture, and cosmopolitan energy. Whether you're sipping a flat white at a harborside café, surfing at Bondi Beach, exploring the cobblestone laneways of The Rocks, or catching a performance at the Opera House, Sydney has an infectious energy that leaves every visitor wanting more. This is truly one of the world's great cities — put it at the top of your travel list! ✈️🌊"
+    },
+    "actor": "Agent",
+    "timestamp": "2026-06-18T00:55:10.823519Z",
+    "agentStatus": "hasReplied"
+  },
+  {
+    "text": "for a weekend trip",
+    "actor": "User",
+    "timestamp": "2026-06-18T00:55:20.396000Z",
+    "agentStatus": null
+  },
+  {
+    "text": "Calling tool resolve_geocode",
+    "actor": "Agent",
+    "timestamp": "2026-06-18T00:55:23.012786Z",
+    "agentStatus": "isThinking"
+  },
+  {
+    "text": "Calling tool search_places",
+    "actor": "Agent",
+    "timestamp": "2026-06-18T00:55:25.368817Z",
+    "agentStatus": "isThinking"
+  },
+  {
+    "text": {
+      "places": [
+        {
+          "name": "Sydney Opera House",
+          "rating": 4.8,
+          "address": "Bennelong Point, Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Museum of Contemporary Art Australia",
+          "rating": 4.3,
+          "address": "140 George Street, The Rocks",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Luna Park Sydney",
+          "rating": 4.1,
+          "address": "1 Olympic Dr, Milsons Point",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Darling Harbour",
+          "rating": 4.7,
+          "address": "Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Sydney Harbour Bridge",
+          "rating": 4.8,
+          "address": "Sydney Harbour Bridge, Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "SEA LIFE Sydney Aquarium",
+          "rating": 4.3,
+          "address": "1-5 Wheat Road, Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Powerhouse Ultimo",
+          "rating": 4.6,
+          "address": "Level 3/500 Harris Street, Ultimo",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "WILD LIFE Sydney Zoo",
+          "rating": 4.1,
+          "address": "1-5 Wheat Road, Sydney",
+          "category": "attraction",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "InterContinental Sydney by IHG",
+          "rating": 4.4,
+          "address": "16 Phillip Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "QT Sydney",
+          "rating": 4.6,
+          "address": "49 Market Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Amora Hotel Jamison Sydney",
+          "rating": 4.2,
+          "address": "11 Jamison Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Swissôtel Sydney",
+          "rating": 4.2,
+          "address": "68 Market Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "The Little Snail Restaurant",
+          "rating": 4.6,
+          "address": "Shop 3/50 Murray Street, Pyrmont",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Adina Surry Hills Sydney",
+          "rating": 4.2,
+          "address": "359 Crown Street, Surry Hills",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Castlereagh Boutique Hotel, Ascend Hotel Collection",
+          "rating": 4,
+          "address": "169 Castlereagh Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Vibe Hotel Sydney",
+          "rating": 3.9,
+          "address": "111 Goulburn Street, Sydney",
+          "category": "restaurant",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Four Seasons Hotel Sydney",
+          "rating": 4.5,
+          "address": "199 George Street, The Rocks",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "The Sebel Quay West Suites Sydney",
+          "rating": 4.5,
+          "address": "98 Gloucester Street, The Rocks",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "YHA Sydney Harbour - The Rocks",
+          "rating": 4.5,
+          "address": "110 Cumberland Street, The Rocks",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "Harbour Rocks Hotel",
+          "rating": 4.3,
+          "address": "34 Harrington Street, The Rocks",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        },
+        {
+          "name": "InterContinental Sydney by IHG",
+          "rating": 4.4,
+          "address": "16 Phillip Street, Sydney",
+          "category": "hotel",
+          "image_url": null,
+          "source_url": null,
+          "description": ""
+        }
+      ],
+      "location": "Sydney NSW, Australia",
+      "narrative": "What a fantastic city for a weekend escape! Here's how to make the most of **48 hours in Sydney** 🌉☀️\n\n**Saturday** is all about the iconic harbour. Start your morning at the **Sydney Opera House** (4.8/5) — even if you don't catch a show, a guided tour of this architectural masterpiece is absolutely worth it. From there, stroll along the waterfront and make your way to the **Sydney Harbour Bridge** (4.8/5). If you're feeling adventurous, book a BridgeClimb for jaw-dropping panoramic views over the city. Afterwards, wander down into the historic cobblestone laneways of **The Rocks**, where you'll find great cafés and the excellent **Museum of Contemporary Art Australia** (4.3/5) on George Street. In the evening, head to **Darling Harbour** (4.7/5) for a lively waterfront dinner — **The Little Snail Restaurant** in nearby Pyrmont (4.6/5) is a fabulous French-inspired choice for a special Saturday night out.\n\n**Sunday** is perfect for family fun and discovery. Head to Wheat Road to choose between the captivating **SEA LIFE Sydney Aquarium** (4.3/5) or the wild-and-wonderful **WILD LIFE Sydney Zoo** (4.1/5) — or squeeze in both if you're an early riser! Round off your trip with a visit to the fascinating **Powerhouse Ultimo** (4.6/5) on Harris Street, a world-class museum of science, technology, and design that's endlessly entertaining. If you still have energy, hop on a ferry across the harbour to **Luna Park Sydney** (4.1/5) at Milsons Point for some retro carnival fun with stunning harbour views as a backdrop.\n\nFor where to rest your head, **The Rocks** precinct is the ideal weekend base — you're walking distance from most top attractions. The **Four Seasons Hotel Sydney** (4.5/5) and **The Sebel Quay West Suites** (4.5/5) are both excellent splurge options, while the **YHA Sydney Harbour** (4.5/5) offers remarkable value without sacrificing location or quality. A weekend in Sydney is never enough — but done right, it'll leave you hungry to come back for more! 🐚🌊✈️"
+    },
+    "actor": "Agent",
+    "timestamp": "2026-06-18T00:55:39.295973Z",
+    "agentStatus": "hasReplied"
+  }
+]

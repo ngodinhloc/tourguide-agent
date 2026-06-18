@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from app.routers.contracts.chat import ChatRequest, ChatResponse
-from app.routers.contracts.chat_interface import ChatInterface, ChatMessage, ChatActor, AgentStatus, ChatResult
+from app.routers.contracts.chat_interface import ChatInterface, ChatMessage, ChatActor, AgentStatus, ChatContent
 
 
 class ChatService:
@@ -56,10 +56,14 @@ class ChatService:
             error = tool_error
 
         if error:
-            chat_obj.content.append(self._make_message(f"Error: {error}", AgentStatus.has_replied, "text"))
+            chat_obj.content.append(self._make_message(f"Error: {error}", AgentStatus.has_replied))
         else:
-            result_json = json.dumps({"location": location_name, "narrative": narrative, "places": places})
-            chat_obj.content.append(self._make_message(result_json, AgentStatus.has_replied, "json"))
+            chat_obj.content.append(
+                self._make_message(
+                    ChatContent(location=location_name, narrative=narrative, places=places),
+                    AgentStatus.has_replied,
+                )
+            )
         chat_obj.agentStatus = AgentStatus.has_replied
         await self._redis.set(key, chat_obj.model_dump_json())
 
@@ -78,9 +82,10 @@ class ChatService:
         messages = []
         for msg in history:
             if msg.actor == "User":
-                messages.append(HumanMessage(content=msg.text))
+                messages.append(HumanMessage(content=msg.text if isinstance(msg.text, str) else ""))
             elif msg.actor == "Agent" and msg.agentStatus == "hasReplied":
-                messages.append(AIMessage(content=msg.text))
+                text = msg.text.get("narrative", "") if isinstance(msg.text, dict) else msg.text
+                messages.append(AIMessage(content=text))
         messages.append(HumanMessage(content=new_message))
         return messages
 
@@ -89,13 +94,12 @@ class ChatService:
         return f"chat:{conversation_id}"
 
     @staticmethod
-    def _make_message(text: str, agent_status: AgentStatus, msg_type: str = "text") -> ChatMessage:
+    def _make_message(text: str | ChatContent, agent_status: AgentStatus) -> ChatMessage:
         return ChatMessage(
             actor=ChatActor.agent,
             text=text,
             timestamp=datetime.now(timezone.utc),
             agentStatus=agent_status,
-            type=msg_type,
         )
 
     @staticmethod

@@ -246,47 +246,51 @@ The client gets `{ id }` back in milliseconds. It then starts polling and sees t
 
 ---
 
-## Step 4 — Type Messages So the Frontend Knows How to Render Them
+## Step 4 — Type the Message Contract
 
-Every `ChatMessage` carries a `type` field: `"text"` for plain content, `"json"` for structured agent replies.
+`ChatMessage.text` is either a plain string (tool call announcements, errors) or a `ChatContent` object (the final structured reply). The shape of `text` is the rendering contract — no separate `type` flag needed.
 
 ```typescript
+interface ChatContent {
+  location: string;
+  narrative: string;
+  places: ChatPlace[];
+}
+
 interface ChatMessage {
   actor: "User" | "Agent";
-  text: string;           // plain string, or JSON string when type === "json"
+  text: string | ChatContent;
   timestamp: Date;
   agentStatus?: "isThinking" | "hasReplied" | null;
-  type: "text" | "json";
 }
 ```
 
-The AI agent encodes the final reply as a JSON string in `text` when `type === "json"`:
+The AI agent builds `ChatContent` directly — no `json.dumps` or string encoding:
 
 ```python
-if error:
-    chat_obj.content.append(
-        self._make_message(f"Error: {error}", AgentStatus.has_replied, "text")
+chat_obj.content.append(
+    self._make_message(
+        ChatContent(location=location_name, narrative=narrative, places=places),
+        AgentStatus.has_replied,
     )
-else:
-    result_json = json.dumps({"location": location_name, "narrative": narrative, "places": places})
-    chat_obj.content.append(
-        self._make_message(result_json, AgentStatus.has_replied, "json")
-    )
+)
 ```
 
-The frontend inspects `type` to decide how to render:
+Pydantic serializes `ChatContent` as a nested JSON object in `model_dump_json()`. The message array stores a real object, not an embedded string.
+
+The frontend distinguishes the two cases with `typeof`:
 
 ```typescript
 const finalMsg = [...chat.content].reverse().find((m) => m.agentStatus === "hasReplied");
 
-if (finalMsg?.type === "json") {
-  setResult(JSON.parse(finalMsg.text) as ChatResult);  // → ResultsPanel
+if (finalMsg && typeof finalMsg.text === "object") {
+  setResult(finalMsg.text);                      // → ResultsPanel
 } else {
-  setError(finalMsg?.text ?? "No response.");          // → error box
+  setError(finalMsg?.text as string ?? "No response.");  // → error box
 }
 ```
 
-This eliminates a parallel `result` field on `ChatInterface`. The message array is the single source of truth — every piece of information, including structured results, lives in `content`. The `type` field is the rendering contract between backend and frontend.
+No `JSON.parse` anywhere. The message array is the single source of truth — structured results are real objects stored as native JSON, not strings embedded inside JSON.
 
 ---
 
@@ -476,7 +480,55 @@ async stopChat(id: string): Promise<{ stopped: true }> {
 }
 ```
 
-Storing the message array directly — rather than a `ChatInterface` object that embeds the array — means the DB row is a clean, flat record. Every piece of structured information (including the full result payload for each agent turn) lives inside a `ChatMessage` with `type: "json"`. Nothing is split across columns.
+Storing the message array directly — rather than a `ChatInterface` object that embeds the array — means the DB row is a clean, flat record. Every piece of structured information, including the full result payload for each agent turn, lives inside a `ChatMessage`. Nothing is split across columns.
+
+Here is what an actual `content` column value looks like after a multi-turn conversation about Sydney:
+
+```json
+[
+  { "actor": "User", "text": "tell me about Sydney",
+    "timestamp": "2026-06-18T00:54:52.046000Z", "agentStatus": null },
+  { "actor": "Agent", "text": "Calling tool resolve_geocode",
+    "timestamp": "2026-06-18T00:54:54.034561Z", "agentStatus": "isThinking" },
+  { "actor": "Agent", "text": "Calling tool search_places",
+    "timestamp": "2026-06-18T00:54:56.798732Z", "agentStatus": "isThinking" },
+  {
+    "actor": "Agent",
+    "text": {
+      "location": "Sydney NSW, Australia",
+      "narrative": "Sydney is one of the world's most breathtaking cities...",
+      "places": [
+        { "name": "Sydney Opera House", "category": "attraction",
+          "address": "Bennelong Point, Sydney", "rating": 4.8,
+          "description": "", "image_url": null, "source_url": null },
+        { "name": "Four Seasons Hotel Sydney", "category": "hotel",
+          "address": "199 George Street, The Rocks", "rating": 4.5,
+          "description": "", "image_url": null, "source_url": null }
+      ]
+    },
+    "timestamp": "2026-06-18T00:55:10.823519Z",
+    "agentStatus": "hasReplied"
+  },
+  { "actor": "User", "text": "for a weekend trip",
+    "timestamp": "2026-06-18T00:55:20.396000Z", "agentStatus": null },
+  { "actor": "Agent", "text": "Calling tool resolve_geocode",
+    "timestamp": "2026-06-18T00:55:23.012786Z", "agentStatus": "isThinking" },
+  { "actor": "Agent", "text": "Calling tool search_places",
+    "timestamp": "2026-06-18T00:55:25.368817Z", "agentStatus": "isThinking" },
+  {
+    "actor": "Agent",
+    "text": {
+      "location": "Sydney NSW, Australia",
+      "narrative": "What a fantastic city for a weekend escape!...",
+      "places": [ "..." ]
+    },
+    "timestamp": "2026-06-18T00:55:39.295973Z",
+    "agentStatus": "hasReplied"
+  }
+]
+```
+
+`text` is a native JSON object for structured replies and a plain string for everything else. The frontend reads `typeof text === "object"` to decide whether to render `ResultsPanel` or a plain text message.
 
 The poll endpoint also writes to the DB opportunistically: when it detects `agentStatus === hasReplied` in Redis, it fires a background update so a page refresh never loses a completed reply, even if the user never explicitly triggers `stopChat`:
 
@@ -509,9 +561,9 @@ async getChat(id: string): Promise<ChatInterface> {
 
 **ReAct over hardcoded pipeline.** A fixed `planner → researcher → synthesizer` sequence is a workflow, not an agent. The LLM driving tool selection at runtime is what makes the system an actual agent — it can adapt to what the tools return, handle errors gracefully, and generalise to inputs the pipeline wasn't designed for.
 
-**`type` field as a rendering contract.** Every `ChatMessage` has a `type: "text" | "json"` field. The frontend branches on this — never on the actor, the index, or any implicit positional assumption. Adding a new message kind (e.g., `"image"`) only requires adding a branch in the renderer. No schema changes elsewhere.
+**`text: string | ChatContent` as the rendering contract.** The shape of `text` encodes the rendering intent — no separate discriminator field needed. If `typeof text === "object"`, it's a `ChatContent` to render as cards and narrative; if it's a string, it's a plain text message or error. This keeps the data stored in PostgreSQL as proper typed JSON rather than a JSON string embedded inside a JSON object.
 
-**Result embedded in the message, not alongside it.** Putting the structured result (`location`, `narrative`, `places`) inside the `hasReplied` message as a JSON string means the message array is the single source of truth. A multi-turn conversation with ten replies has ten self-contained result payloads — each visible in the flat DB row and reconstructable without joins or extra columns.
+**Result embedded in the message, not alongside it.** Putting the structured result (`location`, `narrative`, `places`) inside the `hasReplied` message means the message array is the single source of truth. A multi-turn conversation with ten replies has ten self-contained result payloads — each visible in the flat DB row and reconstructable without joins or extra columns.
 
 **`splitTurns` for history reconstruction.** A flat `ChatMessage[]` is the canonical representation — both in Redis and PostgreSQL. Splitting into turns is a pure function over that array, applied only when needed (history load). This means the storage format never changes based on how many turns a conversation has.
 

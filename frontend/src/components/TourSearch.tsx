@@ -6,7 +6,7 @@ import SearchBar from "./SearchBar";
 import ResultsPanel from "./ResultsPanel";
 import LoadingSkeleton from "./LoadingSkeleton";
 import { newChat, continueChat, pollChat, stopChat } from "@/lib/api";
-import { AgentStatus, ChatResult, ChatMessage } from "@/types/chat";
+import { AgentStatus, ChatContent, ChatMessage } from "@/types/chat";
 import { MapPin } from "lucide-react";
 
 const POLL_INTERVAL_MS = 2_000;
@@ -15,13 +15,13 @@ const IDLE_TIMEOUT_MS = 30_000;
 interface CompletedTurn {
   userMessage: string;
   thinkingMessages: ChatMessage[];
-  result: ChatResult | null;
+  result: ChatContent | null;
 }
 
 interface Turn {
   userMessage: string;
   agentMessages: ChatMessage[];
-  result: ChatResult | null;
+  result: ChatContent | null;
   error: string | null;
 }
 
@@ -37,13 +37,8 @@ function splitTurns(content: ChatMessage[]): Turn[] {
     } else if (msg.actor === "Agent") {
       agentMessages.push(msg);
       if (msg.agentStatus === "hasReplied") {
-        let result: ChatResult | null = null;
-        let error: string | null = null;
-        if (msg.type === "json") {
-          try { result = JSON.parse(msg.text) as ChatResult; } catch { error = "Failed to parse agent response."; }
-        } else {
-          error = msg.text;
-        }
+        const result: ChatContent | null = typeof msg.text === "object" ? msg.text : null;
+        const error: string | null = typeof msg.text === "string" ? msg.text : null;
         turns.push({ userMessage, agentMessages: [...agentMessages], result, error });
         userMessage = "";
         agentMessages = [];
@@ -60,7 +55,7 @@ export default function TourSearch() {
   const chatId = searchParams.get("chat");
 
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<ChatResult | null>(null);
+  const [result, setResult] = useState<ChatContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinkingIdle, setIsThinkingIdle] = useState(false);
@@ -210,14 +205,10 @@ export default function TourSearch() {
       if (chat.agentStatus === "hasReplied") {
         endConversation();
         const finalMsg = [...chat.content].reverse().find((m) => m.agentStatus === "hasReplied");
-        if (finalMsg?.type === "json") {
-          try {
-            setResult(JSON.parse(finalMsg.text) as ChatResult);
-          } catch {
-            setError("Failed to parse agent response.");
-          }
+        if (finalMsg && typeof finalMsg.text === "object") {
+          setResult(finalMsg.text);
         } else {
-          setError(finalMsg?.text ?? "The agent did not return a response.");
+          setError(typeof finalMsg?.text === "string" ? finalMsg.text : "The agent did not return a response.");
         }
         try {
           await stopChat(id);
@@ -348,7 +339,7 @@ export default function TourSearch() {
                         {new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                       </span>
                       <span className="text-indigo-400">$</span>
-                      {m.text}
+                      {typeof m.text === "string" ? m.text : ""}
                     </li>
                   ))}
                 </ul>
@@ -376,7 +367,7 @@ export default function TourSearch() {
                         {new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                       </span>
                       <span className="text-indigo-400">$</span>
-                      {m.text}
+                      {typeof m.text === "string" ? m.text : ""}
                     </li>
                   ))}
                   {isThinkingIdle && loading && (

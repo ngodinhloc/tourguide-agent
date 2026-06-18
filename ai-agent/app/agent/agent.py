@@ -9,7 +9,7 @@ class Agent:
     _SYSTEM = """You are an enthusiastic and knowledgeable travel guide.
 
 When given a travel query:
-1. Call geocode_location to resolve the destination to a canonical name and GPS coordinates.
+1. Call resolve_geocode to resolve the destination to a canonical name and GPS coordinates.
 2. Call search_places with the returned latitude and longitude to find nearby venues.
 3. Write a comprehensive 2-3 paragraph travel narrative about the destination based on the venues found.
 

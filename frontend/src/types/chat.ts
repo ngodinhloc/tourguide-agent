@@ -12,7 +12,7 @@ export interface ChatPlace {
   source_url: string | null;
 }
 
-export interface ChatResult {
+export interface ChatContent {
   location: string;
   narrative: string;
   places: ChatPlace[];
@@ -20,10 +20,9 @@ export interface ChatResult {
 
 export interface ChatMessage {
   actor: ChatActor;
-  text: string;
+  text: string | ChatContent;
   timestamp: string;
   agentStatus?: AgentStatus | null;
-  type: "text" | "json";
 }
 
 export interface ChatInterface {
