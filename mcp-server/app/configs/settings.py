@@ -2,14 +2,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    anthropic_api_key: str
-    mcp_server_url: str = "http://localhost:8002"
-    mcp_protocol: str = "MCP"
-    redis_url: str = "redis://localhost:6379"
+    google_api_key: str
     cors_origins: str = "http://localhost:3000"
-    langsmith_api_key: str = ""
-    langsmith_tracing: bool = False
-    langsmith_project: str = "tourguide-agent"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

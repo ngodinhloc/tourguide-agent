@@ -48,4 +48,3 @@ class PlacesTool:
             self.get_hotels(latitude, longitude),
         )
         return attractions + restaurants + hotels
-

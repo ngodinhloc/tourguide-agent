@@ -26,4 +26,3 @@ class GeocodingTool:
             return {"location_name": name, "latitude": lat, "longitude": lng}
         except ValueError as e:
             return {"error": str(e)}
-

@@ -24,22 +24,24 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 
 ## Architecture
 
+![Architecture overview](./architecture.png)
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  Browser                                                     │
-│  Next.js frontend  (port 3000)                               │
-│  · Search bar, streaming tool-call log, results panel        │
-│  · Multi-turn chat with completed-turn history               │
-│  · Sidebar with conversation history                         │
-└────────────────────────┬─────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Browser                                                         │
+│  Next.js frontend  (port 3000)                                   │
+│  · Search bar, streaming tool-call log, results panel            │
+│  · Multi-turn chat with completed-turn history                   │
+│  · Sidebar with conversation history                             │
+└────────────────────────┬─────────────────────────────────────────┘
                          │ HTTP  /api/*  (Next.js proxy)
-┌────────────────────────▼─────────────────────────────────────┐
-│  Backend  (NestJS · port 8000)                               │
-│  · REST chat API                                             │
-│  · PostgreSQL  — persists conversations as ChatMessage[]     │
-│  · Redis       — live chat state during agent processing     │
-│  · Fires async POST to AI Agent (fire-and-forget)            │
-└──────────┬───────────────────────────┬───────────────────────┘
+┌────────────────────────▼─────────────────────────────────────────┐
+│  Backend  (NestJS · port 8000)                                   │
+│  · REST chat API                                                 │
+│  · PostgreSQL  — persists conversations as ChatMessage[]         │
+│  · Redis       — live chat state during agent processing         │
+│  · Fires async POST to AI Agent (fire-and-forget)                │
+└──────────┬───────────────────────────┬───────────────────────────┘
            │ async POST /api/chat       │ read / write
            │                           │
 ┌──────────▼───────────────┐   ┌───────▼────────────┐
@@ -47,6 +49,17 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 │  FastAPI · port 8001     │──▶│  key: chat:{uuid}  │
 │  LangGraph ReAct loop    │   └────────────────────┘
 │  agent ⇄ tools           │
+│  MCP_PROTOCOL=MCP|REST   │
+└──────────┬───────────────┘
+           │ MCP (streamable HTTP) or REST
+┌──────────▼───────────────┐
+│  MCP Server              │
+│  FastMCP · port 8002     │
+│  POST /mcp/  — MCP       │
+│  GET  /api/tools  — REST │
+│  POST /api/tool/call      │
+│  resolve_geocode          │
+│  search_places            │
 └──────────────────────────┘
 ```
 
@@ -58,6 +71,7 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 |---------|------|-----------|-------|
 | postgres | 5432 | — | PostgreSQL 17 |
 | redis | internal | — | Redis 7 |
+| mcp-server | 8002 | `mcp-server/` | FastMCP + FastAPI |
 | ai-agent | 8001 | `ai-agent/` | FastAPI + LangGraph + LangChain Anthropic |
 | backend | 8000 | `backend/` | NestJS 11 + TypeORM |
 | frontend | 3000 | `frontend/` | Next.js 15 + React 19 + Tailwind CSS 4 |
@@ -85,19 +99,66 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 
 ### AI Agent (port 8001)
 
-Runs a LangGraph ReAct agent triggered by `POST /api/chat`. The LLM decides which tools to call, in what order, and when it has enough to reply.
+Runs a LangGraph ReAct agent triggered by `POST /api/chat`. The LLM decides which tools to call, in what order, and when it has enough to reply. Tools are delegated to the MCP server via `McpTools` (MCP protocol) or `RestTools` (REST), selected by `MCP_PROTOCOL`.
 
 **ReAct loop:**
 
 ```
 agent node  →  calls LLM with tools bound
      │
-     ├── LLM returns tool_calls  →  tools node executes  →  back to agent
+     ├── LLM returns tool_calls  →  tools node executes  →  calls MCP server  →  back to agent
      │
      └── LLM returns narrative (no tool_calls)  →  END
 ```
 
+**Tool client abstraction:**
+
+```
+ToolClientFactory(mcp_server_url, mcp_protocol)
+    .create()
+        ├── MCP_PROTOCOL=MCP  →  McpTools   (FastMCP Client over streamable HTTP)
+        └── MCP_PROTOCOL=REST →  RestTools  (httpx POST /api/tool/call)
+```
+
+`ToolClientInterface` (ABC) enforces that both `McpTools` and `RestTools` implement `call(name, arguments)`. Python raises `TypeError` at instantiation if the method is missing.
+
 **Multi-turn context:** The request carries the full conversation `history`. `ChatManager.build_messages` reconstructs it as LangChain messages — user turns become `HumanMessage`, completed agent replies become `AIMessage`, and tool-call progress messages are skipped — so the LLM reads the full dialogue before responding.
+
+**Module structure:**
+
+```
+app/
+├── agent/
+│   ├── contracts/agent_interface.py         — AgentState (extends MessagesState)
+│   ├── tools/
+│   │   ├── tool_client_interface.py         — ToolClientInterface (ABC)
+│   │   ├── mcp_tools.py                     — McpTools (FastMCP Client)
+│   │   ├── rest_tools.py                    — RestTools (httpx)
+│   │   ├── tool_client_factory.py           — ToolClientFactory
+│   │   └── tools.py                         — @tool resolve_geocode, @tool search_places
+│   ├── agent.py                             — Agent class (LLM + system prompt)
+│   └── agent_graph.py                       — AgentGraph class (ReAct graph)
+├── configs/settings.py                      — Settings (Pydantic BaseSettings)
+├── container.py                             — Container class (cached_property singletons)
+├── main.py                                  — FastAPI app, middleware, routers
+├── routers/
+│   ├── contracts/chat_interface.py          — ChatInterface, ChatMessage, AgentStatus types
+│   ├── chat_router.py                       — POST /api/chat
+│   └── health_router.py                     — GET /api/health
+└── services/
+    ├── chat_service.py                      — ChatService (graph execution, Redis streaming)
+    ├── chat_manager.py                      — ChatManager (message building, Redis reads/writes)
+    └── redis_client.py                      — RedisClient
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/chat` | Run the ReAct agent (new or continued conversation) |
+| `GET` | `/api/health` | Health check |
+
+### MCP Server (port 8002)
+
+Exposes the two Google API tools over both MCP protocol and REST. The AI agent can call either protocol via `MCP_PROTOCOL`. All incoming requests are logged — MCP calls include the full JSON-RPC envelope.
 
 **Tools:**
 
@@ -110,31 +171,25 @@ agent node  →  calls LLM with tools bound
 
 ```
 app/
-├── agent/
-│   ├── contracts/agent_interface.py   — AgentState (extends MessagesState)
-│   ├── tools/
-│   │   ├── geocoding_tool.py          — GeocodingTool class
-│   │   ├── places_tool.py             — PlacesTool class
-│   │   └── tools.py                   — @tool resolve_geocode, @tool search_places
-│   ├── agent.py                       — Agent class (LLM + system prompt)
-│   └── agent_graph.py                 — AgentGraph class (ReAct graph)
-├── configs/settings.py                — Settings (Pydantic BaseSettings)
-├── container.py                       — Container class (cached_property singletons)
-├── main.py                            — FastAPI app, middleware, routers
+├── configs/settings.py                      — Settings (Pydantic BaseSettings)
+├── container.py                             — Container class (GeocodingTool, PlacesTool)
+├── fast_mcp.py                              — FastMCP instance + @fast_mcp.tool() definitions
+├── main.py                                  — FastAPI app, lifespan wired to FastMCP, /mcp mount
 ├── routers/
-│   ├── contracts/chat_interface.py    — ChatInterface, ChatMessage, AgentStatus types
-│   ├── chat_router.py                 — POST /api/chat
-│   └── health_router.py               — GET /api/health
-└── services/
-    ├── chat_service.py                — ChatService (graph execution, Redis streaming)
-    ├── chat_manager.py                — ChatManager (message building, Redis reads/writes)
-    └── redis_client.py                — RedisClient
+│   ├── contracts/tool_interface.py          — TOOLS_SCHEMA, TOOL_DISPATCH, ToolCallRequest
+│   ├── tools_router.py                      — GET /api/tools, POST /api/tool/call
+│   └── health_router.py                     — GET /api/health
+└── tools/
+    ├── geocoding_tool.py                    — GeocodingTool class
+    └── places_tool.py                       — PlacesTool class
 ```
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/chat` | Run the ReAct agent (new or continued conversation) |
-| `GET` | `/api/health` | Health check |
+| Method | Path | Protocol | Description |
+|--------|------|----------|-------------|
+| `POST` | `/mcp/` | MCP | FastMCP streamable HTTP endpoint |
+| `GET` | `/api/tools` | REST | List tool schemas |
+| `POST` | `/api/tool/call` | REST | Call a tool by name |
+| `GET` | `/api/health` | REST | Health check |
 
 ---
 
@@ -228,7 +283,9 @@ The PostgreSQL `content` column stores a flat `ChatMessage[]` directly as `jsonb
 ```bash
 # 1. Fill in API keys
 cp ai-agent/.env.example ai-agent/.env
-# edit ai-agent/.env — set ANTHROPIC_API_KEY and GOOGLE_API_KEY
+cp mcp-server/.env.example mcp-server/.env
+# edit ai-agent/.env   — set ANTHROPIC_API_KEY
+# edit mcp-server/.env — set GOOGLE_API_KEY
 
 # 2. Start all services
 docker-compose up --build
@@ -240,5 +297,5 @@ Open [http://localhost:3000](http://localhost:3000).
 
 | Key | Service | Where to get |
 |-----|---------|-------------|
-| `ANTHROPIC_API_KEY` | AI Agent | [console.anthropic.com](https://console.anthropic.com) |
-| `GOOGLE_API_KEY` | AI Agent | Google Cloud Console — enable **Geocoding API** and **Places API** |
+| `ANTHROPIC_API_KEY` | `ai-agent/.env` | [console.anthropic.com](https://console.anthropic.com) |
+| `GOOGLE_API_KEY` | `mcp-server/.env` | Google Cloud Console — enable **Geocoding API** and **Places API** |
