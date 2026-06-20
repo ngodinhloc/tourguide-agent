@@ -1,9 +1,8 @@
 from langchain_core.tools import tool
 from app.configs.settings import settings
-from app.agent.tools.tool_client_interface import ToolClientInterface
-from app.agent.tools.tool_client_factory import ToolClientFactory
+from app.agent.tools.mcp_client import McpClient
 
-_client: ToolClientInterface = ToolClientFactory(settings.mcp_server_url, settings.mcp_protocol).create()
+_client = McpClient(settings.mcp_server_url)
 
 
 @tool

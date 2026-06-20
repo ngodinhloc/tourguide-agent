@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { LoggingMiddleware } from './common/middleware/logging.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -12,6 +13,8 @@ async function bootstrap() {
     : ['http://localhost:3000'];
 
   app.enableCors({ origin: corsOrigins, credentials: true });
+
+  app.use(new LoggingMiddleware().use.bind(new LoggingMiddleware()));
 
   app.useGlobalPipes(
     new ValidationPipe({

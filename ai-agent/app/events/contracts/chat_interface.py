@@ -56,14 +56,14 @@ class HistoryMessage(BaseModel):
     agentStatus: Optional[str] = None
 
 
-class ChatRequest(BaseModel):
+class ChatEvent(BaseModel):
     conversationId: str
     message: str
     history: list[HistoryMessage] = []
     preferences: Optional[dict] = None
 
 
-class ChatResponse(BaseModel):
+class ChatReply(BaseModel):
     conversationId: str
     location: str
     narrative: str

@@ -40,26 +40,28 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 │  · REST chat API                                                 │
 │  · PostgreSQL  — persists conversations as ChatMessage[]         │
 │  · Redis       — live chat state during agent processing         │
-│  · Fires async POST to AI Agent (fire-and-forget)                │
+│  · Publishes ChatEvent to RabbitMQ (fire-and-forget)            │
 └──────────┬───────────────────────────┬───────────────────────────┘
-           │ async POST /api/chat       │ read / write
-           │                           │
+           │ AMQP publish              │ read / write
+           │ tour-guide.chat           │
 ┌──────────▼───────────────┐   ┌───────▼────────────┐
-│  AI Agent                │   │  Redis             │
-│  FastAPI · port 8001     │──▶│  key: chat:{uuid}  │
-│  LangGraph ReAct loop    │   └────────────────────┘
+│  RabbitMQ                │   │  Redis             │
+│  queue: tour-guide.chat  │   │  key: chat:{uuid}  │
+└──────────┬───────────────┘   └────────────────────┘
+           │ AMQP subscribe
+┌──────────▼───────────────┐
+│  AI Agent                │
+│  FastAPI · port 8001     │
+│  LangGraph ReAct loop    │
 │  agent ⇄ tools           │
-│  MCP_PROTOCOL=MCP|REST   │
 └──────────┬───────────────┘
-           │ MCP (streamable HTTP) or REST
+           │ MCP (streamable HTTP)
 ┌──────────▼───────────────┐
 │  MCP Server              │
 │  FastMCP · port 8002     │
-│  POST /mcp/  — MCP       │
-│  GET  /api/tools  — REST │
-│  POST /api/tool/call      │
-│  resolve_geocode          │
-│  search_places            │
+│  POST /mcp/  — MCP only  │
+│  resolve_geocode         │
+│  search_places           │
 └──────────────────────────┘
 ```
 
@@ -69,6 +71,7 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 
 | Service | Port | Directory | Stack |
 |---------|------|-----------|-------|
+| rabbitmq | 5672 / 15672 | — | RabbitMQ 3 |
 | postgres | 5432 | — | PostgreSQL 17 |
 | redis | internal | — | Redis 7 |
 | mcp-server | 8002 | `mcp-server/` | FastMCP + FastAPI |
@@ -90,8 +93,8 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/chat/new` | Create conversation in PostgreSQL + Redis, call AI Agent, return `{ id }` |
-| `POST` | `/api/chat/:id/cont` | Append user message to history, call AI Agent, return `{ accepted: true }` |
+| `POST` | `/api/chat/new` | Create conversation in PostgreSQL + Redis, publish `ChatEvent` to RabbitMQ, return `{ id }` |
+| `POST` | `/api/chat/:id/cont` | Append user message to history, publish `ChatEvent` to RabbitMQ, return `{ accepted: true }` |
 | `GET` | `/api/chat/history` | Return all conversations (id, title, createdAt) |
 | `GET` | `/api/chat/:id` | Live `ChatInterface` from Redis, or persisted version from PostgreSQL |
 | `POST` | `/api/chat/:id/stop` | Persist `ChatMessage[]` to PostgreSQL, delete Redis key |
@@ -99,7 +102,7 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 
 ### AI Agent (port 8001)
 
-Runs a LangGraph ReAct agent triggered by `POST /api/chat`. The LLM decides which tools to call, in what order, and when it has enough to reply. Tools are delegated to the MCP server via `McpTools` (MCP protocol) or `RestTools` (REST), selected by `MCP_PROTOCOL`.
+Consumes `ChatEvent` messages from the `tour-guide.chat` RabbitMQ queue. For each event, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), delegating all tool calls to the MCP server via `McpClient` (MCP protocol over streamable HTTP). Agent progress is written to Redis after each node so the browser can poll for real-time updates.
 
 **ReAct loop:**
 
@@ -111,18 +114,15 @@ agent node  →  calls LLM with tools bound
      └── LLM returns narrative (no tool_calls)  →  END
 ```
 
-**Tool client abstraction:**
+**Event pipeline:**
 
 ```
-ToolClientFactory(mcp_server_url, mcp_protocol)
-    .create()
-        ├── MCP_PROTOCOL=MCP  →  McpTools   (FastMCP Client over streamable HTTP)
-        └── MCP_PROTOCOL=REST →  RestTools  (httpx POST /api/tool/call)
+RabbitMQConsumer
+    → ChatEventHandler.handle(message)
+        → ChatService.handle(event)
+            → AgentGraph.astream(...)
+                → McpClient.call(tool, args)
 ```
-
-`ToolClientInterface` (ABC) enforces that both `McpTools` and `RestTools` implement `call(name, arguments)`. Python raises `TypeError` at instantiation if the method is missing.
-
-**Multi-turn context:** The request carries the full conversation `history`. `ChatManager.build_messages` reconstructs it as LangChain messages — user turns become `HumanMessage`, completed agent replies become `AIMessage`, and tool-call progress messages are skipped — so the LLM reads the full dialogue before responding.
 
 **Module structure:**
 
@@ -131,19 +131,21 @@ app/
 ├── agent/
 │   ├── contracts/agent_interface.py         — AgentState (extends MessagesState)
 │   ├── tools/
-│   │   ├── tool_client_interface.py         — ToolClientInterface (ABC)
-│   │   ├── mcp_tools.py                     — McpTools (FastMCP Client)
-│   │   ├── rest_tools.py                    — RestTools (httpx)
-│   │   ├── tool_client_factory.py           — ToolClientFactory
+│   │   ├── mcp_client.py                    — McpClient (FastMCP Client over streamable HTTP)
 │   │   └── tools.py                         — @tool resolve_geocode, @tool search_places
 │   ├── agent.py                             — Agent class (LLM + system prompt)
 │   └── agent_graph.py                       — AgentGraph class (ReAct graph)
 ├── configs/settings.py                      — Settings (Pydantic BaseSettings)
 ├── container.py                             — Container class (cached_property singletons)
-├── main.py                                  — FastAPI app, middleware, routers
+├── events/
+│   ├── contracts/
+│   │   ├── chat_interface.py                — ChatEvent, ChatReply, HistoryMessage
+│   │   └── consumer_message.py             — ConsumerMessage (typing.Protocol)
+│   ├── handlers/
+│   │   └── chat_event_handler.py            — ChatEventHandler
+│   └── rabbitmq_consumer.py                 — RabbitMQConsumer
+├── main.py                                  — FastAPI app, lifespan starts RabbitMQ consumer
 ├── routers/
-│   ├── contracts/chat_interface.py          — ChatInterface, ChatMessage, AgentStatus types
-│   ├── chat_router.py                       — POST /api/chat
 │   └── health_router.py                     — GET /api/health
 └── services/
     ├── chat_service.py                      — ChatService (graph execution, Redis streaming)
@@ -153,12 +155,11 @@ app/
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/chat` | Run the ReAct agent (new or continued conversation) |
 | `GET` | `/api/health` | Health check |
 
 ### MCP Server (port 8002)
 
-Exposes the two Google API tools over both MCP protocol and REST. The AI agent can call either protocol via `MCP_PROTOCOL`. All incoming requests are logged — MCP calls include the full JSON-RPC envelope.
+Exposes the two Google API tools over the MCP protocol only. All tool calls from the AI agent arrive as streamable HTTP at `POST /mcp/`. Owns the Google API keys; the AI Agent calls it without any direct access to the external APIs.
 
 **Tools:**
 
@@ -176,8 +177,6 @@ app/
 ├── fast_mcp.py                              — FastMCP instance + @fast_mcp.tool() definitions
 ├── main.py                                  — FastAPI app, lifespan wired to FastMCP, /mcp mount
 ├── routers/
-│   ├── contracts/tool_interface.py          — TOOLS_SCHEMA, TOOL_DISPATCH, ToolCallRequest
-│   ├── tools_router.py                      — GET /api/tools, POST /api/tool/call
 │   └── health_router.py                     — GET /api/health
 └── tools/
     ├── geocoding_tool.py                    — GeocodingTool class
@@ -187,8 +186,6 @@ app/
 | Method | Path | Protocol | Description |
 |--------|------|----------|-------------|
 | `POST` | `/mcp/` | MCP | FastMCP streamable HTTP endpoint |
-| `GET` | `/api/tools` | REST | List tool schemas |
-| `POST` | `/api/tool/call` | REST | Call a tool by name |
 | `GET` | `/api/health` | REST | Health check |
 
 ---

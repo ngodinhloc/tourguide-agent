@@ -1,4 +1,17 @@
 services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
   postgres:
     image: postgres:17-alpine
     ports:
@@ -59,12 +72,15 @@ services:
       - ./ai-agent/.env
     environment:
       REDIS_URL: "redis://redis:6379"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
       CORS_ORIGINS: "http://localhost:3000,http://backend:8000"
       MCP_SERVER_URL: "http://mcp-server:8000"
     volumes:
       - ./ai-agent:/app
     depends_on:
       mcp-server:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
@@ -87,15 +103,17 @@ services:
       CORS_ORIGINS: "http://localhost:3000"
       DATABASE_URL: "postgresql://tourguide:tourguide@postgres:5432/tourguide"
       REDIS_URL: "redis://redis:6379"
-      AI_AGENT_URL: "http://ai-agent:8000"
+      RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/"
     volumes:
       - ./backend:/app
-      - /app/node_modules
-      - /app/dist
+      - backend_node_modules:/app/node_modules
+      - backend_dist:/app/dist
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
@@ -126,3 +144,5 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  backend_node_modules:
+  backend_dist:

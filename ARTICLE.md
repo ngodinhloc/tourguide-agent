@@ -7,7 +7,7 @@ This article walks through the design and implementation of a full-stack AI agen
 - Claude writes a travel narrative based on the venues and returns a structured result.
 - Follow-up queries like "what about for families?" continue the conversation — the agent carries the full context forward.
 
-The focus is on the decisions that make this work in practice: how to structure a LangGraph ReAct agent across multiple services, how to expose tools via the MCP protocol, how to stream agent progress to the browser without WebSockets, and how to reconstruct multi-turn conversation history at the service boundary.
+The focus is on the decisions that make this work in practice: how to structure a LangGraph ReAct agent across multiple services, how to expose tools via the MCP protocol, how to decouple services with a message broker, how to stream agent progress to the browser without WebSockets, and how to reconstruct multi-turn conversation history at the service boundary.
 
 ![Agent streaming tool calls and loading skeleton](./screenshot_1.png)
 
@@ -22,15 +22,17 @@ The focus is on the decisions that make this work in practice: how to structure 
 **Frontend** (Next.js 15, port 3000) — search bar, live tool-call log, and results panel. Polls `GET /api/chat/{id}` every 2 seconds while the agent is processing. Completed turns stay visible on screen as the conversation continues below. Left sidebar lists saved conversations and reloads them on click.
 
 **Backend** (NestJS 11, port 8000) — REST chat API:
-- `POST /api/chat/new` — create conversation in PostgreSQL + Redis, fire-and-forget to AI Agent, return `{ id }`
-- `POST /api/chat/:id/cont` — append user message to history, fire-and-forget to AI Agent
+- `POST /api/chat/new` — create conversation in PostgreSQL + Redis, publish `ChatEvent` to RabbitMQ, return `{ id }`
+- `POST /api/chat/:id/cont` — append user message to history, publish `ChatEvent` to RabbitMQ
 - `GET /api/chat/:id` — return live chat from Redis, or persisted version from PostgreSQL
 - `POST /api/chat/:id/stop` — persist `ChatMessage[]` to PostgreSQL, delete Redis key
 - `GET /api/chat/history` — return all conversations (id, title, createdAt)
 
-**AI Agent** (FastAPI + LangGraph, port 8001) — loads the current conversation from Redis, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), and delegates all tool calls to the MCP server. The LLM decides which tools to call, in what order, and when it has enough to write a response. Agent progress is written to Redis after each node — the browser polls and displays each tool call as it happens. The protocol used to reach the MCP server is configurable via `MCP_PROTOCOL=MCP|REST`.
+**RabbitMQ** — message broker between the backend and the AI agent. The backend publishes a `ChatEvent` (conversation ID, message, history) to the durable `tour-guide.chat` queue. The AI agent subscribes and processes events one at a time.
 
-**MCP Server** (FastMCP + FastAPI, port 8002) — exposes `resolve_geocode` and `search_places` over two protocols: MCP (FastMCP's streamable HTTP at `POST /mcp/`) and REST (`POST /api/tool/call`). Owns the Google API keys; the AI Agent calls it without any direct access to the external APIs.
+**AI Agent** (FastAPI + LangGraph, port 8001) — subscribes to the `tour-guide.chat` RabbitMQ queue. For each event, loads the current conversation from Redis, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), and delegates all tool calls to the MCP server via `McpClient`. Agent progress is written to Redis after each node — the browser polls and displays each tool call as it happens.
+
+**MCP Server** (FastMCP + FastAPI, port 8002) — exposes `resolve_geocode` and `search_places` over the MCP protocol (FastMCP's streamable HTTP at `POST /mcp/`). Owns the Google API keys; the AI Agent calls it without any direct access to the external APIs.
 
 **Redis** — live chat state during agent processing, keyed by `chat:{uuid}`; shared by the backend and AI Agent so the browser can poll for real-time progress without WebSockets.
 
@@ -89,35 +91,80 @@ app.mount("/mcp", _mcp_app)
 
 ## Step 3 — Call the MCP Server from the Agent
 
-The agent supports two protocols — MCP and REST — selected by `MCP_PROTOCOL` at startup. Define an interface and let a factory pick the implementation.
-
-Python has no `interface` keyword. `abc.ABC` enforces the contract at runtime — instantiating a subclass that skips `call()` raises `TypeError` immediately, which is stronger than a `Protocol` (type-checker only):
+The agent calls the MCP server via `McpClient`, which wraps FastMCP's `Client` over streamable HTTP. One subtlety: FastMCP wraps non-dict returns (like `list[dict]`) in `structured_content` as `{"result": [...]}`. Reading `content[0].text` directly returns the original value as a JSON string — no unwrapping needed:
 
 ```python
-class ToolClientInterface(ABC):
-    @abstractmethod
-    async def call(self, name: str, arguments: dict): ...
+class McpClient:
+    def __init__(self, mcp_server_url: str):
+        self._url = f"{mcp_server_url}/mcp/"
 
-class McpTools(ToolClientInterface):
     async def call(self, name: str, arguments: dict):
         async with Client(self._url) as client:
             result = await client.call_tool(name, arguments)
             if result.content and isinstance(result.content[0], TextContent):
                 return json.loads(result.content[0].text)
             return {}
-
-class ToolClientFactory:
-    def create(self) -> ToolClientInterface:
-        if self._mcp_protocol == "MCP":
-            return McpTools(self._mcp_server_url)
-        return RestTools(self._mcp_server_url)
 ```
 
-One subtlety with `McpTools`: FastMCP wraps non-dict returns (like `list[dict]`) in `structured_content` as `{"result": [...]}`. Reading `content[0].text` directly returns the original value as a JSON string — no unwrapping needed.
+The `@tool` functions in `tools.py` delegate directly to `McpClient` — no factory or protocol toggle needed:
+
+```python
+_client = McpClient(settings.mcp_server_url)
+
+@tool
+async def resolve_geocode(query: str) -> dict:
+    """Resolve a free-text travel query to a canonical place name and GPS coordinates."""
+    return await _client.call("resolve_geocode", {"query": query})
+```
 
 ---
 
-## Step 4 — Centralise Dependency Injection
+## Step 4 — Decouple Services with RabbitMQ
+
+An agent call can take 30–60 seconds. Coupling the backend directly to the AI agent via HTTP creates two problems: a long-lived connection that is fragile to restarts, and tight availability coupling — if the agent is slow to start, backend calls fail.
+
+The fix is a message broker. The backend publishes a `ChatEvent` to a durable RabbitMQ queue and returns a conversation ID immediately. The AI agent subscribes independently and processes each event when it is ready:
+
+```typescript
+// backend: publish and return immediately
+publish(event: ChatEvent): void {
+  this.channel.sendToQueue(
+    'tour-guide.chat',
+    Buffer.from(JSON.stringify(event)),
+    { persistent: true },
+  );
+}
+```
+
+```python
+# ai-agent: subscribe and process
+async def start(self) -> None:
+    connection = await aio_pika.connect_robust(self._url)
+    channel = await connection.channel()
+    queue = await channel.declare_queue(QUEUE, durable=True)
+    async with queue.iterator() as messages:
+        async for message in messages:
+            async with message.process():
+                await self._event_handler.handle(message)
+```
+
+The queue is durable and messages are persistent — if the agent restarts mid-processing, unacknowledged messages are requeued. `message.process()` acts as a context manager: it ACKs the message if the block completes without error, and NACKs (requeues) if an exception is raised.
+
+The AI agent startup wires the consumer as a background asyncio task via FastAPI's lifespan:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(container.rabbitmq_consumer.start())
+    yield
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+```
+
+---
+
+## Step 5 — Centralise Dependency Injection
 
 Both the AI agent and the MCP server use a `Container` class with `@cached_property` to wire dependencies. The first access constructs the object; every subsequent access returns the cached instance — no global variables, no `if _instance is None` guards:
 
@@ -138,21 +185,17 @@ class Container:
 container = Container()
 ```
 
-`ChatService` receives everything through its constructor — it never imports `container` directly. The FastAPI router resolves from it via `Depends`.
+The event pipeline follows the same pattern — `RabbitMQConsumer`, `ChatEventHandler`, and `ChatService` are all wired through the container with injected dependencies:
 
----
-
-## Step 5 — Decouple the Agent from the API Layer
-
-An agent call can take 30–60 seconds. Holding an HTTP connection open for that duration is fragile and non-resumable. The fix is fire-and-forget — the backend persists the chat to Redis, fires the agent without awaiting it, and returns a conversation ID immediately:
-
-```typescript
-await this.redisService.setJson(`chat:${id}`, chatObject);
-this.agentService.call(id, message, []);  // no await
-return { id };
+```python
+@cached_property
+def rabbitmq_consumer(self) -> RabbitMQConsumer:
+    return RabbitMQConsumer(
+        rabbitmq_url=settings.rabbitmq_url,
+        event_handler=self.chat_event_handler,
+        logger=self.logger("rabbitmq_consumer"),
+    )
 ```
-
-The client polls `GET /api/chat/{id}` and sees agent progress as it writes to Redis. If the client disconnects and reconnects, it picks up from wherever the agent stopped — state is in Redis, not in memory.
 
 ---
 
@@ -203,7 +246,7 @@ The frontend uses recursive `setTimeout` (not `setInterval`) to avoid stacking p
 
 ## Step 8 — Multi-Turn Conversations
 
-The backend passes the full `ChatMessage[]` history to the agent on each follow-up. The agent reconstructs LangChain messages from it — user turns become `HumanMessage`, completed replies become `AIMessage`. Tool-call progress messages (`isThinking`) are skipped — they are UI state, not conversation context:
+The backend passes the full `ChatMessage[]` history to the agent on each follow-up via the `ChatEvent` payload. The agent reconstructs LangChain messages from it — user turns become `HumanMessage`, completed replies become `AIMessage`. Tool-call progress messages (`isThinking`) are skipped — they are UI state, not conversation context:
 
 ```python
 for msg in history:
@@ -239,9 +282,11 @@ The poll endpoint also writes to PostgreSQL opportunistically — when it detect
 
 **ReAct over hardcoded pipeline.** A fixed `geocode → search → write` sequence is a workflow, not an agent. The LLM driving tool selection at runtime is what makes this an actual agent — it can handle errors from tool results, generalise to inputs the pipeline was not designed for, and skip tools that are not needed.
 
-**MCP server as a separate service.** The agent does not call Google APIs directly. Extracting tool implementations into a dedicated MCP server means the agent owns no API keys, the tools are callable from any MCP-compatible client, and both protocols (MCP and REST) are available on the same endpoints. The `MCP_PROTOCOL` env var lets you switch between them without code changes.
+**RabbitMQ over HTTP for agent dispatch.** Calling the AI agent via HTTP creates tight coupling — a slow agent restart means the backend returns errors. Publishing a durable message to a queue decouples availability: the backend always succeeds immediately, and the agent processes the message when it is ready. Durable queues with persistent messages also survive restarts without losing work.
 
-**`ToolClientInterface` as an ABC, not a Protocol.** Python's `abc.ABC` enforces the interface at runtime — instantiating a subclass that doesn't implement `call()` raises `TypeError` immediately. A `Protocol` is only checked by type checkers. For a contract that must hold at startup, ABC is the right choice.
+**MCP server as a separate service.** The agent does not call Google APIs directly. Extracting tool implementations into a dedicated MCP server means the agent owns no API keys and the tools are callable from any MCP-compatible client. The MCP protocol (JSON-RPC over streamable HTTP) is the sole interface — no REST fallback needed.
+
+**`ConsumerMessage` as a `typing.Protocol`.** The RabbitMQ consumer handler receives a `ConsumerMessage` (a structural type with `body: bytes`) rather than `aio_pika.IncomingMessage`. This keeps the handler layer free of the AMQP library, making it testable without a real queue.
 
 **Always read `content[0].text`, not `structured_content`.** FastMCP wraps non-dict returns (like `list[dict]`) into `structured_content` as `{"result": [...]}`. The `content[0].text` field always contains the raw serialized value — using it directly avoids the wrapping and keeps the parsing logic simple.
 
@@ -252,8 +297,6 @@ The poll endpoint also writes to PostgreSQL opportunistically — when it detect
 **`splitTurns` for history reconstruction.** A flat `ChatMessage[]` is the canonical format in both Redis and PostgreSQL. Splitting into turns is a pure function applied only when needed (loading history). The storage format never changes based on how many turns a conversation has.
 
 **Redis over WebSockets.** Redis with polling is simpler to operate, easy to debug (`redis-cli get chat:{uuid}` shows exactly what state the agent is in), and scales without sticky sessions. For a 2-second poll interval the overhead is small.
-
-**Fire-and-forget over synchronous execution.** Long-running agents must not block an HTTP connection. Returning a job ID immediately and letting the client poll is more resilient — the client can disconnect and reconnect without corrupting the agent's execution.
 
 **`@cached_property` as the singleton mechanism.** One decorator replaces the `global _instance / if _instance is None` pattern. The `Container` class documents what gets constructed; the cache ensures it happens once.
 

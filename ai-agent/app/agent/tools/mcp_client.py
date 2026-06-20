@@ -2,12 +2,11 @@ import json
 import logging
 from fastmcp import Client
 from mcp.types import TextContent
-from app.agent.tools.tool_client_interface import ToolClientInterface
 
 logger = logging.getLogger("mcp_tools")
 
 
-class McpTools(ToolClientInterface):
+class McpClient:
     def __init__(self, mcp_server_url: str):
         self._url = f"{mcp_server_url}/mcp/"
 

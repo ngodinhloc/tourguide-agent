@@ -1,7 +1,7 @@
 import logging
 from fastapi import HTTPException
 from app.agent.agent_graph import AgentGraph
-from app.routers.contracts.chat_interface import ChatRequest, ChatResponse
+from app.events.contracts.chat_interface import ChatEvent, ChatReply
 from app.services.chat_manager import ChatManager
 from app.services.redis_helper import RedisHelper
 
@@ -12,7 +12,7 @@ class ChatService:
         self._logger = logger
         self._message_manager = chat_manager
 
-    async def handle(self, request: ChatRequest) -> ChatResponse:
+    async def handle(self, request: ChatEvent) -> ChatReply:
         """Process a chat request end-to-end: load state, run the agent graph, and return the reply.
 
         Args:
@@ -39,7 +39,7 @@ class ChatService:
         if error:
             raise HTTPException(status_code=500, detail=error)
 
-        return ChatResponse(
+        return ChatReply(
             conversationId=request.conversationId,
             location=location_name,
             narrative=narrative,

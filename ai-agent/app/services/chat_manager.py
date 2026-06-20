@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from fastapi import HTTPException
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from app.routers.contracts.chat_interface import (
+from app.events.contracts.chat_interface import (
     ChatInterface, ChatMessage, ChatActor, AgentStatus, ChatContent,
 )
 
