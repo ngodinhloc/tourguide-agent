@@ -34,6 +34,15 @@ class ChatService:
         if tool_error and not error:
             error = tool_error
 
+        # When the LLM skips tool calls (e.g. follow-up refining an existing result),
+        # reuse places and location from the most recent completed turn in history.
+        if not places:
+            for msg in reversed(request.history):
+                if msg.actor == "Agent" and msg.agentStatus == "hasReplied" and isinstance(msg.text, dict):
+                    places = msg.text.get("places", [])
+                    location_name = msg.text.get("location", location_name)
+                    break
+
         await self._message_manager.append_reply_message(key, chat_obj, error, location_name, narrative, places)
 
         if error:

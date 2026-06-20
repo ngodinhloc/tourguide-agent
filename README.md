@@ -105,7 +105,7 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 
 ### AI Agent (port 8001)
 
-Consumes `ChatEvent` messages from the `tour-guide.chat` RabbitMQ queue. For each event, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), delegating all tool calls to the MCP server via `McpClient` (MCP protocol over streamable HTTP). Agent progress is written to Redis after each node. The backend's WebSocket gateway polls Redis at 500 ms and pushes updates to the browser in real time.
+Consumes `ChatEvent` messages from the `tour-guide.chat` RabbitMQ queue. For each event, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), delegating all tool calls to the MCP server via `McpClient` (MCP protocol over streamable HTTP). The system prompt instructs the LLM to skip `resolve_geocode` and `search_places` when place data is already present in conversation history — follow-up queries only rewrite the narrative. When no tools are called, `ChatService` falls back to the `places` and `location` from the most recent completed reply in history so every response has a full result. Agent progress is written to Redis after each node. The backend's WebSocket gateway polls Redis at 500 ms and pushes updates to the browser in real time.
 
 **ReAct loop:**
 

@@ -1,13 +1,13 @@
-# Design and Build a Full-Stack AI Agent
+# Agentic AI: Building an Event-Driven Agent with LangGraph and MCP
 
-This article walks through the design and implementation of a full-stack AI agent application, using a travel guide as the example. The agent receives a free-text location query and runs a ReAct loop — Claude decides which tools to call, reads the results, and keeps going until it has enough to write a response. Live progress streams to the browser as each tool is invoked, and multi-turn conversations are supported.
+This article walks through the design and implementation of a full-stack agentic AI application, using a travel guide as the example. A user types a free-text location query, and the agent runs a ReAct loop — Claude decides which tools to call, reads the results, and keeps reasoning until it has enough to write a response. Live progress streams to the browser as each tool is invoked. Follow-up queries like "what about for families?" continue the conversation, with the agent carrying the full context forward.
 
-- User types a free-text location query in plain English.
-- The agent runs a ReAct loop — it calls tools, reads the results, and decides what to do next.
-- Claude writes a travel narrative based on the venues and returns a structured result.
-- Follow-up queries like "what about for families?" continue the conversation — the agent carries the full context forward.
-
-The focus is on the decisions that make this work in practice: how to structure a LangGraph ReAct agent across multiple services, how to expose tools via the MCP protocol, how to decouple services with a message broker, how to stream agent progress to the browser in real time via WebSockets, and how to reconstruct multi-turn conversation history at the service boundary.
+The focus is on the decisions that make this work in practice: 
+- How to structure a LangGraph ReAct agent across multiple services
+- Hw to expose tools via the MCP protocol
+- How to decouple services with a message broker
+- How to stream agent progress to the browser in real time via WebSockets
+- How to reconstruct multi-turn conversation history at the service boundary.
 
 ![Agent streaming tool calls and loading skeleton](./screenshot_1.png)
 
@@ -30,7 +30,7 @@ The focus is on the decisions that make this work in practice: how to structure 
 
 **RabbitMQ** — message broker between the backend and the AI agent. The backend publishes a `ChatEvent` (conversation ID, message, history) to the durable `tour-guide.chat` queue. The AI agent subscribes and processes events one at a time.
 
-**AI Agent** (FastAPI + LangGraph, port 8001) — subscribes to the `tour-guide.chat` RabbitMQ queue. For each event, loads the current conversation from Redis, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), and delegates all tool calls to the MCP server via `McpClient`. Agent progress is written to Redis after each node — the browser polls and displays each tool call as it happens.
+**AI Agent** (FastAPI + LangGraph, port 8001) — subscribes to the `tour-guide.chat` RabbitMQ queue. For each event, loads the current conversation from Redis, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), and delegates all tool calls to the MCP server via `McpClient`. Agent progress is written to Redis after each node — the backend pushes each update to the browser in real time via WebSocket.
 
 **MCP Server** (FastMCP + FastAPI, port 8002) — exposes `resolve_geocode` and `search_places` over the MCP protocol (FastMCP's streamable HTTP at `POST /mcp/`). Owns the Google API keys; the AI Agent calls it without any direct access to the external APIs.
 
@@ -246,7 +246,7 @@ The frontend connects to `ws://localhost:8000/ws` and sends `{ event: "subscribe
 
 ## Step 8 — Multi-Turn Conversations
 
-The backend passes the full `ChatMessage[]` history to the agent on each follow-up via the `ChatEvent` payload. The agent reconstructs LangChain messages from it — user turns become `HumanMessage`, completed replies become `AIMessage`. Tool-call progress messages (`isThinking`) are skipped — they are UI state, not conversation context:
+The backend passes the full `ChatMessage[]` history to the agent on each follow-up via the `ChatEvent` payload. The agent reconstructs LangChain messages from it — user turns become `HumanMessage`, completed replies become `AIMessage`. Tool-call progress messages (`isThinking`) are skipped — they are UI state, not conversation context. Only the narrative is passed as the prior `AIMessage`; the full `ChatContent` object (with its place list) stays in history as a `dict` and is available to the service layer:
 
 ```python
 for msg in history:
@@ -255,6 +255,29 @@ for msg in history:
     elif msg.actor == "Agent" and msg.agentStatus == "hasReplied":
         text = msg.text.get("narrative", "") if isinstance(msg.text, dict) else msg.text
         messages.append(AIMessage(content=text))
+```
+
+The system prompt instructs the LLM to check whether place data already exists in conversation history before calling any tools:
+
+```
+If the conversation already contains place data for the relevant destination:
+- Do NOT call resolve_geocode or search_places again.
+- Reuse the existing places from the conversation history.
+- Rewrite the narrative to fit the new angle (e.g. "for a weekend", "for families").
+
+If place data for the destination is not yet available:
+1. Call resolve_geocode → 2. Call search_places → 3. Write narrative.
+```
+
+Because the LLM only returns a new narrative (not a new place list), `ChatService` falls back to the `places` and `location` from the most recent `hasReplied` message in history whenever no tools were called:
+
+```python
+if not places:
+    for msg in reversed(request.history):
+        if msg.actor == "Agent" and msg.agentStatus == "hasReplied" and isinstance(msg.text, dict):
+            places = msg.text.get("places", [])
+            location_name = msg.text.get("location", location_name)
+            break
 ```
 
 On the frontend, a `splitTurns` function splits the flat `ChatMessage[]` back into turns when loading a saved conversation. Each `User` message starts a new turn; `agentStatus === "hasReplied"` closes it. All turns except the last go into `completedTurns` — old results stay visible above as the new turn processes below.
@@ -298,7 +321,7 @@ The stop endpoint also writes to PostgreSQL opportunistically — when it detect
 
 **WebSocket delivery over HTTP polling.** The browser opens a WebSocket to `/ws` and subscribes by sending a chat ID. The backend gateway polls Redis at 500 ms per subscription and pushes each change — no client-side timers, no wasted requests when nothing has changed. Redis remains the shared state store between the AI agent and the backend, easy to inspect (`redis-cli get chat:{uuid}`) and shared without sticky sessions.
 
-**Tool reuse across multi-turn conversations.** The LLM's system prompt explicitly instructs it to skip `resolve_geocode` and `search_places` when place data for the destination is already present in conversation history. Follow-up queries like "for a weekend" or "for families" only rewrite the narrative — no redundant API calls and no extra latency.
+**Tool reuse across multi-turn conversations.** The LLM's system prompt instructs it to skip `resolve_geocode` and `search_places` when place data for the destination is already present in conversation history, rewriting the narrative only. Because the LLM returns only a new narrative (not a new place list), `ChatService` fills in the places and location from the most recent `hasReplied` message in history as a fallback. The result is always complete — fresh narrative, correct place cards — with no redundant API calls and no extra latency.
 
 **`@cached_property` as the singleton mechanism.** One decorator replaces the `global _instance / if _instance is None` pattern. The `Container` class documents what gets constructed; the cache ensures it happens once.
 
