@@ -25,7 +25,7 @@ export async function newChat(message: string): Promise<{ id: string }> {
   });
 }
 
-export async function pollChat(id: string): Promise<ChatInterface> {
+export async function getChat(id: string): Promise<ChatInterface> {
   return request(`/api/chat/${id}`);
 }
 

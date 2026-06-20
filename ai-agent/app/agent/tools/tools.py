@@ -7,15 +7,15 @@ _client = McpClient(settings.mcp_server_url)
 
 @tool
 async def resolve_geocode(query: str) -> dict:
-    """Resolve a free-text travel query (e.g. 'anything to see in Sydney') to a
-    canonical place name and GPS coordinates. Always call this first."""
+    """Resolve a free-text travel query to a canonical place name and GPS coordinates.
+    Only call this when the destination is not already known from the conversation history."""
     return await _client.call("resolve_geocode", {"query": query})
 
 
 @tool
 async def search_places(latitude: float, longitude: float) -> list[dict]:
     """Search for attractions, restaurants, and hotels near the given GPS coordinates.
-    Pass the latitude and longitude returned by resolve_geocode."""
+    Only call this when place data for the destination is not already present in the conversation history."""
     return await _client.call("search_places", {"latitude": latitude, "longitude": longitude})
 
 

@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { WsAdapter } from '@nestjs/platform-ws';
 import { AppModule } from './app.module';
 import { LoggingMiddleware } from './common/middleware/logging.middleware';
 
@@ -14,6 +15,7 @@ async function bootstrap() {
 
   app.enableCors({ origin: corsOrigins, credentials: true });
 
+  app.useWebSocketAdapter(new WsAdapter(app));
   app.use(new LoggingMiddleware().use.bind(new LoggingMiddleware()));
 
   app.useGlobalPipes(

@@ -5,11 +5,10 @@ import { useSearchParams } from "next/navigation";
 import SearchBar from "./SearchBar";
 import ResultsPanel from "./ResultsPanel";
 import LoadingSkeleton from "./LoadingSkeleton";
-import { newChat, continueChat, pollChat, stopChat } from "@/lib/api";
-import { AgentStatus, ChatContent, ChatMessage } from "@/types/chat";
+import { newChat, continueChat, getChat, stopChat } from "@/lib/api";
+import { AgentStatus, ChatContent, ChatInterface, ChatMessage } from "@/types/chat";
 import { MapPin } from "lucide-react";
 
-const POLL_INTERVAL_MS = 2_000;
 const IDLE_TIMEOUT_MS = 30_000;
 
 interface CompletedTurn {
@@ -32,7 +31,7 @@ function splitTurns(content: ChatMessage[]): Turn[] {
 
   for (const msg of content) {
     if (msg.actor === "User") {
-      userMessage = msg.text;
+      userMessage = msg.text as string;
       agentMessages = [];
     } else if (msg.actor === "Agent") {
       agentMessages.push(msg);
@@ -49,6 +48,16 @@ function splitTurns(content: ChatMessage[]): Turn[] {
   return turns;
 }
 
+function buildWsUrl(): string {
+  const base = process.env.NEXT_PUBLIC_WS_URL;
+  if (base) return `${base}/ws`;
+  if (typeof window !== "undefined") {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.hostname}:8000/ws`;
+  }
+  return "ws://localhost:8000/ws";
+}
+
 export default function TourSearch() {
   const searchParams = useSearchParams();
   const session = searchParams.get("session");
@@ -62,7 +71,7 @@ export default function TourSearch() {
   const [userMessage, setUserMessage] = useState<string | null>(null);
   const [completedTurns, setCompletedTurns] = useState<CompletedTurn[]>([]);
 
-  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const idleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
@@ -71,10 +80,12 @@ export default function TourSearch() {
   const agentMessageOffsetRef = useRef(0);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
 
-  function cancelPoll() {
-    if (pollTimeoutRef.current) {
-      clearTimeout(pollTimeoutRef.current);
-      pollTimeoutRef.current = null;
+  function disconnectWs() {
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
+      wsRef.current.close();
+      wsRef.current = null;
     }
   }
 
@@ -86,7 +97,7 @@ export default function TourSearch() {
   }
 
   function endConversation() {
-    cancelPoll();
+    disconnectWs();
     cancelIdleTimer();
     activeIdRef.current = null;
     agentStatusRef.current = null;
@@ -95,7 +106,7 @@ export default function TourSearch() {
 
   // New chat button — full reset
   useEffect(() => {
-    cancelPoll();
+    disconnectWs();
     cancelIdleTimer();
     activeIdRef.current = null;
     conversationIdRef.current = null;
@@ -115,7 +126,7 @@ export default function TourSearch() {
   // Load history chat
   useEffect(() => {
     if (!chatId) return;
-    cancelPoll();
+    disconnectWs();
     cancelIdleTimer();
     activeIdRef.current = null;
     conversationIdRef.current = null;
@@ -129,7 +140,7 @@ export default function TourSearch() {
     setLoading(true);
     setCompletedTurns([]);
 
-    pollChat(chatId)
+    getChat(chatId)
       .then((chat) => {
         const turns = splitTurns(chat.content);
         if (turns.length === 0) return;
@@ -150,7 +161,6 @@ export default function TourSearch() {
           }))
         );
 
-        // Offset = total agent messages from all completed turns so handleContinue advances correctly
         agentMessageOffsetRef.current = prevTurns.reduce((acc: number, t: Turn) => acc + t.agentMessages.length, 0);
       })
       .catch((err) => {
@@ -177,6 +187,7 @@ export default function TourSearch() {
         // best-effort
       }
     }, IDLE_TIMEOUT_MS);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -184,51 +195,78 @@ export default function TourSearch() {
     events.forEach((e) => window.addEventListener(e, resetIdleTimer));
     return () => {
       events.forEach((e) => window.removeEventListener(e, resetIdleTimer));
-      cancelPoll();
+      disconnectWs();
       cancelIdleTimer();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetIdleTimer]);
 
-  async function schedulePoll(id: string) {
-    try {
-      const chat = await pollChat(id);
-      agentStatusRef.current = chat.agentStatus ?? null;
+  function subscribeToChat(id: string) {
+    disconnectWs();
 
-      // Only show agent messages belonging to the current turn
-      const allAgentMessages = chat.content.filter((m) => m.actor === "Agent");
-      const currentTurnMessages = allAgentMessages.slice(agentMessageOffsetRef.current);
-      const thinkingCount = currentTurnMessages.filter((m) => m.agentStatus === "isThinking").length;
-      setIsThinkingIdle(thinkingCount === prevThinkingCountRef.current);
-      prevThinkingCountRef.current = thinkingCount;
-      setMessages(currentTurnMessages);
+    const ws = new WebSocket(buildWsUrl());
+    wsRef.current = ws;
 
-      if (chat.agentStatus === "hasReplied") {
-        endConversation();
-        const finalMsg = [...chat.content].reverse().find((m) => m.agentStatus === "hasReplied");
-        if (finalMsg && typeof finalMsg.text === "object") {
-          setResult(finalMsg.text);
-        } else {
-          setError(typeof finalMsg?.text === "string" ? finalMsg.text : "The agent did not return a response.");
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ event: "subscribe", data: id }));
+    };
+
+    ws.onmessage = (evt) => {
+      try {
+        const { event: type, data } = JSON.parse(evt.data as string) as {
+          event: string;
+          data: ChatInterface | string;
+        };
+
+        if (type === "error") {
+          endConversation();
+          setError(typeof data === "string" ? data : "Agent error.");
+          return;
         }
-        try {
-          await stopChat(id);
-        } catch {
-          // best-effort
+
+        if (type !== "chat-update") return;
+        const chat = data as ChatInterface;
+
+        agentStatusRef.current = chat.agentStatus ?? null;
+
+        const allAgentMessages = chat.content.filter((m) => m.actor === "Agent");
+        const currentTurnMessages = allAgentMessages.slice(agentMessageOffsetRef.current);
+        const thinkingCount = currentTurnMessages.filter((m) => m.agentStatus === "isThinking").length;
+        setIsThinkingIdle(thinkingCount === prevThinkingCountRef.current);
+        prevThinkingCountRef.current = thinkingCount;
+        setMessages(currentTurnMessages);
+
+        if (chat.agentStatus === "hasReplied") {
+          endConversation();
+          const finalMsg = [...chat.content].reverse().find((m) => m.agentStatus === "hasReplied");
+          if (finalMsg && typeof finalMsg.text === "object") {
+            setResult(finalMsg.text);
+          } else {
+            setError(typeof finalMsg?.text === "string" ? finalMsg.text : "The agent did not return a response.");
+          }
+          stopChat(id).catch(() => {});
+          window.dispatchEvent(new CustomEvent("chat-completed"));
         }
-        window.dispatchEvent(new CustomEvent("chat-completed"));
-      } else if (chat.agentStatus === "isThinking") {
-        pollTimeoutRef.current = setTimeout(() => schedulePoll(id), POLL_INTERVAL_MS);
-      } else {
-        endConversation();
+      } catch {
+        // ignore parse errors
       }
-    } catch (pollErr) {
+    };
+
+    ws.onerror = () => {
       endConversation();
-      setError(pollErr instanceof Error ? pollErr.message : "Polling failed.");
-    }
+      setError("Connection error. Please try again.");
+    };
+
+    ws.onclose = (evt) => {
+      if (!evt.wasClean && activeIdRef.current === id) {
+        endConversation();
+        setError("Connection lost. Please try again.");
+      }
+    };
   }
 
   async function handleSearch(message: string) {
-    cancelPoll();
+    disconnectWs();
     cancelIdleTimer();
     prevThinkingCountRef.current = 0;
     agentMessageOffsetRef.current = 0;
@@ -245,7 +283,7 @@ export default function TourSearch() {
       activeIdRef.current = id;
       conversationIdRef.current = id;
       resetIdleTimer();
-      schedulePoll(id);
+      subscribeToChat(id);
     } catch (err) {
       setLoading(false);
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -256,7 +294,6 @@ export default function TourSearch() {
     const id = conversationIdRef.current ?? chatId;
     if (!id) return;
 
-    // Save the current turn before resetting
     if (userMessage) {
       setCompletedTurns((prev: CompletedTurn[]) => [
         ...prev,
@@ -268,10 +305,9 @@ export default function TourSearch() {
       ]);
     }
 
-    // Advance offset past all agent messages from completed turns
     agentMessageOffsetRef.current += messages.length;
 
-    cancelPoll();
+    disconnectWs();
     cancelIdleTimer();
     prevThinkingCountRef.current = 0;
     setLoading(true);
@@ -285,7 +321,7 @@ export default function TourSearch() {
       await continueChat(id, message);
       activeIdRef.current = id;
       resetIdleTimer();
-      schedulePoll(id);
+      subscribeToChat(id);
     } catch (err) {
       setLoading(false);
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");

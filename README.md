@@ -33,11 +33,13 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 │  · Search bar, streaming tool-call log, results panel            │
 │  · Multi-turn chat with completed-turn history                   │
 │  · Sidebar with conversation history                             │
-└────────────────────────┬─────────────────────────────────────────┘
-                         │ HTTP  /api/*  (Next.js proxy)
-┌────────────────────────▼─────────────────────────────────────────┐
+└────────────────────────┬────────────────────┬────────────────────┘
+                         │ HTTP  /api/*        │ WS  /ws
+                         │ (Next.js proxy)     │ (direct)
+┌────────────────────────▼────────────────────▼────────────────────┐
 │  Backend  (NestJS · port 8000)                                   │
 │  · REST chat API                                                 │
+│  · WebSocket gateway — polls Redis and pushes chat-update events │
 │  · PostgreSQL  — persists conversations as ChatMessage[]         │
 │  · Redis       — live chat state during agent processing         │
 │  · Publishes ChatEvent to RabbitMQ (fire-and-forget)            │
@@ -82,8 +84,8 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 ### Frontend (port 3000)
 
 - Search bar for free-text location queries
-- Polls `GET /api/chat/{id}` every 2 seconds while the agent is processing
-- Live tool-call log (`Calling tool resolve_geocode`, etc.) that updates as the agent works
+- Opens a WebSocket to `ws://localhost:8000/ws` and receives real-time agent progress events as the agent works
+- Live tool-call log (`Calling tool resolve_geocode`, etc.) that updates instantly via WebSocket
 - `Thinking…` indicator between tool calls when the agent is processing but hasn't announced the next step
 - Final reply renders as a narrative paragraph + place cards (`ResultsPanel`)
 - Multi-turn UI — completed turns stay on screen; each new turn processes below
@@ -99,10 +101,11 @@ An AI travel guide. Type a free-text location query — "anything to see in Sydn
 | `GET` | `/api/chat/:id` | Live `ChatInterface` from Redis, or persisted version from PostgreSQL |
 | `POST` | `/api/chat/:id/stop` | Persist `ChatMessage[]` to PostgreSQL, delete Redis key |
 | `GET` | `/api/health` | Health check |
+| `WS` | `/ws` | Subscribe to real-time chat updates; server polls Redis at 500 ms and pushes `chat-update` events until `agentStatus === hasReplied` |
 
 ### AI Agent (port 8001)
 
-Consumes `ChatEvent` messages from the `tour-guide.chat` RabbitMQ queue. For each event, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), delegating all tool calls to the MCP server via `McpClient` (MCP protocol over streamable HTTP). Agent progress is written to Redis after each node so the browser can poll for real-time updates.
+Consumes `ChatEvent` messages from the `tour-guide.chat` RabbitMQ queue. For each event, runs a LangGraph ReAct loop with Claude (`claude-sonnet-4-6`), delegating all tool calls to the MCP server via `McpClient` (MCP protocol over streamable HTTP). Agent progress is written to Redis after each node. The backend's WebSocket gateway polls Redis at 500 ms and pushes updates to the browser in real time.
 
 **ReAct loop:**
 

@@ -7,11 +7,11 @@ This article walks through the design and implementation of a full-stack AI agen
 - Claude writes a travel narrative based on the venues and returns a structured result.
 - Follow-up queries like "what about for families?" continue the conversation — the agent carries the full context forward.
 
-The focus is on the decisions that make this work in practice: how to structure a LangGraph ReAct agent across multiple services, how to expose tools via the MCP protocol, how to decouple services with a message broker, how to stream agent progress to the browser without WebSockets, and how to reconstruct multi-turn conversation history at the service boundary.
+The focus is on the decisions that make this work in practice: how to structure a LangGraph ReAct agent across multiple services, how to expose tools via the MCP protocol, how to decouple services with a message broker, how to stream agent progress to the browser in real time via WebSockets, and how to reconstruct multi-turn conversation history at the service boundary.
 
 ![Agent streaming tool calls and loading skeleton](./screenshot_1.png)
 
-*The streaming tool-call log. Each tool the agent calls appears as a new line while the frontend polls every 2 seconds.*
+*The streaming tool-call log. Each tool call appears in real time via WebSocket as the agent works.*
 
 ---
 
@@ -19,7 +19,7 @@ The focus is on the decisions that make this work in practice: how to structure 
 
 ![Architecture overview](./architecture.png)
 
-**Frontend** (Next.js 15, port 3000) — search bar, live tool-call log, and results panel. Polls `GET /api/chat/{id}` every 2 seconds while the agent is processing. Completed turns stay visible on screen as the conversation continues below. Left sidebar lists saved conversations and reloads them on click.
+**Frontend** (Next.js 15, port 3000) — search bar, live tool-call log, and results panel. Opens a WebSocket to `ws://localhost:8000/ws` and receives real-time `chat-update` events as the agent works. Completed turns stay visible on screen as the conversation continues below. Left sidebar lists saved conversations and reloads them on click.
 
 **Backend** (NestJS 11, port 8000) — REST chat API:
 - `POST /api/chat/new` — create conversation in PostgreSQL + Redis, publish `ChatEvent` to RabbitMQ, return `{ id }`
@@ -34,7 +34,7 @@ The focus is on the decisions that make this work in practice: how to structure 
 
 **MCP Server** (FastMCP + FastAPI, port 8002) — exposes `resolve_geocode` and `search_places` over the MCP protocol (FastMCP's streamable HTTP at `POST /mcp/`). Owns the Google API keys; the AI Agent calls it without any direct access to the external APIs.
 
-**Redis** — live chat state during agent processing, keyed by `chat:{uuid}`; shared by the backend and AI Agent so the browser can poll for real-time progress without WebSockets.
+**Redis** — live chat state during agent processing, keyed by `chat:{uuid}`; shared by the backend and AI Agent. The backend's WebSocket gateway polls Redis at 500 ms and pushes `chat-update` events to subscribed browser clients.
 
 **PostgreSQL** — persistent store; written when a conversation starts and again when it stops (full `ChatMessage[]`). History and reload reads come from here.
 
@@ -236,7 +236,7 @@ async for update in self._graph.astream(..., stream_mode="updates"):
         await self._message_manager.save_chat(key, chat_obj)
 ```
 
-The frontend uses recursive `setTimeout` (not `setInterval`) to avoid stacking polls when a response is slow. `agentMessageOffsetRef` slices the agent message list to show only the current turn's tool calls — completed turns keep their own log visible above.
+The frontend connects to `ws://localhost:8000/ws` and sends `{ event: "subscribe", data: chatId }`. The backend's `ChatGateway` polls Redis at 500 ms for that chat key and pushes `{ event: "chat-update", data: ChatInterface }` to the client on every change. When `agentStatus === "hasReplied"` arrives, the gateway stops polling and the client closes the connection. `agentMessageOffsetRef` slices the agent message list to show only the current turn's tool calls — completed turns keep their own log visible above.
 
 ![Completed travel guide with narrative and place cards](./screenshot_2.png)
 
@@ -274,7 +274,7 @@ async stopChat(id: string): Promise<{ stopped: true }> {
 }
 ```
 
-The poll endpoint also writes to PostgreSQL opportunistically — when it detects `agentStatus === hasReplied` in Redis it fires a background `update`, so a page refresh never loses a completed reply even if `stopChat` is never called.
+The stop endpoint also writes to PostgreSQL opportunistically — when it detects `agentStatus === hasReplied` in Redis it persists the full `ChatMessage[]`, so a page refresh never loses a completed reply even if `stopChat` was delayed.
 
 ---
 
@@ -296,7 +296,9 @@ The poll endpoint also writes to PostgreSQL opportunistically — when it detect
 
 **`splitTurns` for history reconstruction.** A flat `ChatMessage[]` is the canonical format in both Redis and PostgreSQL. Splitting into turns is a pure function applied only when needed (loading history). The storage format never changes based on how many turns a conversation has.
 
-**Redis over WebSockets.** Redis with polling is simpler to operate, easy to debug (`redis-cli get chat:{uuid}` shows exactly what state the agent is in), and scales without sticky sessions. For a 2-second poll interval the overhead is small.
+**WebSocket delivery over HTTP polling.** The browser opens a WebSocket to `/ws` and subscribes by sending a chat ID. The backend gateway polls Redis at 500 ms per subscription and pushes each change — no client-side timers, no wasted requests when nothing has changed. Redis remains the shared state store between the AI agent and the backend, easy to inspect (`redis-cli get chat:{uuid}`) and shared without sticky sessions.
+
+**Tool reuse across multi-turn conversations.** The LLM's system prompt explicitly instructs it to skip `resolve_geocode` and `search_places` when place data for the destination is already present in conversation history. Follow-up queries like "for a weekend" or "for families" only rewrite the narrative — no redundant API calls and no extra latency.
 
 **`@cached_property` as the singleton mechanism.** One decorator replaces the `global _instance / if _instance is None` pattern. The `Container` class documents what gets constructed; the cache ensures it happens once.
 
